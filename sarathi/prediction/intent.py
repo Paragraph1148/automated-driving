@@ -23,6 +23,13 @@ from ..core.kinematics import HOLONOMIC_CLASSES
 from ..core.types import AgentClass, params_for
 from ..perception.fusion import Track
 
+#: Below this per-sample displacement a predicted path has no meaningful
+#: direction and its heading must come from elsewhere.
+MIN_STEP_FOR_HEADING = 0.02
+
+#: Tracked speed below which an object is treated as stationary for prediction.
+STATIONARY_SPEED = 0.8
+
 #: Lateral displacement a wheeled vehicle can achieve per metre travelled forward.
 #: Roughly tan(25 deg) - a brisk but achievable lane change.
 LATERAL_SLIP_RATIO = 0.45
@@ -110,6 +117,11 @@ class IntentPredictor:
         v = tr.velocity
         s_dot = float(v[0] * np.cos(th_ref) + v[1] * np.sin(th_ref))
         d_dot = float(-v[0] * np.sin(th_ref) + v[1] * np.cos(th_ref))
+        # A stationary object's tracked velocity is filter noise. Propagating it
+        # makes the predicted path wander, which then defines a direction from
+        # nothing - so treat it as genuinely still.
+        if tr.speed < STATIONARY_SPEED:
+            s_dot = d_dot = 0.0
 
         priors = self._priors(tr, s_dot)
         modes = []
@@ -120,10 +132,43 @@ class IntentPredictor:
             s_traj, d_traj = self._roll_out(manoeuvre, s, d, s_dot, d_dot,
                                             params, ego_d)
             xy, headings = ref.frenet_traj_to_cartesian(s_traj, d_traj)
+            headings = self._stable_headings(xy, headings, s_traj, tr, ref)
             sl, sw = self._uncertainty(tr, params, manoeuvre)
             modes.append(PredictedMode(manoeuvre, prob, xy, headings, sl, sw))
         return Prediction(tr.id, tr.cls, tr.cls_confidence,
                           params.length, params.width, modes)
+
+    def _stable_headings(self, xy: np.ndarray, headings: np.ndarray,
+                         s_traj: np.ndarray, tr: Track,
+                         ref: ReferencePath) -> np.ndarray:
+        """Orient the risk kernel reliably, including for stationary agents.
+
+        Heading here comes from finite differences of the predicted path, which is
+        meaningless when the path barely moves: the displacements are pure
+        floating-point noise and ``arctan2`` returns an arbitrary angle. A parked
+        or stopped vehicle therefore got a kernel whose orientation span the whole
+        circle from tick to tick - measured at -94, -180 and +58 degrees on
+        successive samples for a bus actually sitting at 4 degrees.
+
+        That is not cosmetic. The kernels are anisotropic, so a spinning 11 m bus
+        sweeps its length across the whole carriageway and repeatedly closes the
+        gap a vehicle is trying to overtake through.
+
+        Where the predicted step is too small to define a direction, fall back to
+        what the agent is actually doing: its tracked heading, or failing that the
+        road beneath it.
+        """
+        step = np.hypot(np.gradient(xy[:, 0]), np.gradient(xy[:, 1]))
+        moving = step > MIN_STEP_FOR_HEADING
+        if np.all(moving):
+            return headings
+
+        if tr.has_heading or tr.speed >= STATIONARY_SPEED:
+            fallback = np.full_like(headings, float(tr.heading))
+        else:
+            # Never seen it move: assume it is aligned with the road it sits on.
+            fallback = np.asarray(ref.heading_at(s_traj), dtype=float)
+        return np.where(moving, headings, fallback)
 
     def _priors(self, tr: Track, s_dot: float) -> dict[Manoeuvre, float]:
         """Class priors, then reshaped by what the track is observably doing."""

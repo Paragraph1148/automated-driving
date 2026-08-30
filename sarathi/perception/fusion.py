@@ -35,6 +35,11 @@ MERGE_SIZE_FACTOR = 0.55
 MERGE_SPEED_DELTA = 2.5
 #: Below this many hits a track is too new to have a class opinion worth respecting.
 MERGE_WEAK_HITS = 5
+#: Speed above which a track's velocity direction is trusted as its heading.
+#: Below it the estimate is held: at 0.4 m/s a stationary vehicle's velocity is
+#: noise, and its "direction" is whichever way the noise happened to point.
+HEADING_TRUST_SPEED = 1.0
+
 #: Per-class log-odds are bounded so a long-lived belief stays correctable. An
 #: unbounded belief at +500 can never be revised by contrary evidence.
 CLASS_LOGODDS_LIMIT = 40.0
@@ -64,6 +69,13 @@ class Track:
     confirmed: bool = False
     #: Ground truth id, for evaluation only. Never read by the planner.
     truth_id: int = -1
+    #: Held orientation estimate, updated only while the object is unambiguously
+    #: moving. A stationary vehicle's velocity is almost entirely filter noise, so
+    #: deriving its heading per-tick from atan2(vy, vx) yields a direction that
+    #: spins through the whole circle - and every heading-conditioned consumer
+    #: downstream, the risk kernel above all, spins with it.
+    heading_estimate: float = 0.0
+    has_heading: bool = False
 
     @property
     def position(self) -> np.ndarray:
@@ -79,9 +91,10 @@ class Track:
 
     @property
     def heading(self) -> float:
-        if self.speed < 0.3:
-            return float(self.cls_logodds.get("_last_heading", 0.0))
-        return float(math.atan2(self.vy, self.vx))
+        """Best available orientation - held, not recomputed from noisy velocity."""
+        if self.speed >= HEADING_TRUST_SPEED:
+            return float(math.atan2(self.vy, self.vx))
+        return float(self.heading_estimate)
 
     @property
     def length(self) -> float:
@@ -147,8 +160,9 @@ class Tracker:
             tr.misses = 0
             if tr.hits >= CONFIRM_HITS:
                 tr.confirmed = True
-            if tr.speed > 0.3:
-                tr.cls_logodds["_last_heading"] = math.atan2(tr.vy, tr.vx)
+            if tr.speed >= HEADING_TRUST_SPEED:
+                tr.heading_estimate = math.atan2(tr.vy, tr.vx)
+                tr.has_heading = True
 
         for tr in self.tracks.values():
             if tr.id not in assigned:
@@ -203,6 +217,8 @@ class Tracker:
                 for cls, value in b.cls_logodds.items():
                     if isinstance(cls, AgentClass):
                         a.cls_logodds[cls] = a.cls_logodds.get(cls, 0.0) + value
+                if b.has_heading and not a.has_heading:
+                    a.heading_estimate, a.has_heading = b.heading_estimate, True
                 a.hits += b.hits
                 dropped.add(b_id)
         for tid in dropped:

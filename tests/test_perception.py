@@ -200,3 +200,52 @@ def test_low_class_confidence_widens_the_hypotheses():
         return float(mode.sigma_lat[-1])
 
     assert continue_sigma(0.45) > continue_sigma(0.70) > continue_sigma(0.95)
+
+
+def test_stationary_track_holds_a_stable_heading():
+    """A stopped vehicle's velocity is noise; its orientation must not follow it.
+
+    Deriving heading from atan2(vy, vx) every tick made a parked bus's risk
+    kernel spin through the whole circle, sweeping its 11 m length across the
+    carriageway and repeatedly closing gaps the ego was trying to drive through.
+    """
+    tr = Track(id=1, x=0.0, y=0.0, vx=9.0, vy=0.0,
+               P=np.diag([0.2, 0.2, 1.0, 1.0]), cls=AgentClass.BUS)
+    tr.heading_estimate, tr.has_heading = 0.0, True
+    settled = tr.heading
+
+    rng = np.random.default_rng(0)
+    for _ in range(60):
+        # Stopped, with the velocity estimate wandering as a filter's would.
+        tr.vx, tr.vy = rng.normal(0.0, 0.25), rng.normal(0.0, 0.25)
+        assert tr.heading == pytest.approx(settled), \
+            "heading followed the noise instead of holding"
+
+
+def test_prediction_orients_a_stopped_vehicle_along_its_body():
+    pred = IntentPredictor()
+    ref = straight_ref()
+    tr = Track(id=1, x=60.0, y=1.5, vx=0.05, vy=-0.04,
+               P=np.diag([0.2, 0.2, 1.0, 1.0]), cls=AgentClass.BUS,
+               cls_confidence=0.95)
+    tr.heading_estimate, tr.has_heading = 0.0, True
+    for mode in pred.predict([tr], ref, ego_d=1.8)[0].modes:
+        spread = float(np.degrees(mode.headings.max() - mode.headings.min()))
+        worst = float(np.max(np.abs(np.degrees(mode.headings))))
+        assert spread < 5.0, f"{mode.manoeuvre} kernel rotates {spread:.0f}°"
+        assert worst < 5.0, f"{mode.manoeuvre} kernel points {worst:.0f}° off"
+
+
+def test_never_seen_moving_falls_back_to_the_road():
+    """A vehicle parked since spawn has no observed heading; use the road's."""
+    pred = IntentPredictor()
+    th = np.linspace(0, np.pi / 3, 300)
+    curved = ReferencePath(np.column_stack([80 * np.sin(th), 80 * (1 - np.cos(th))]),
+                           smooth_window=0)
+    point = curved.to_cartesian(60.0, 1.0)
+    tr = Track(id=1, x=float(point[0]), y=float(point[1]), vx=0.0, vy=0.0,
+               P=np.diag([0.2, 0.2, 1.0, 1.0]), cls=AgentClass.PARKED_VEHICLE)
+    assert not tr.has_heading
+    mode = pred.predict([tr], curved, ego_d=1.0)[0].modes[0]
+    road = float(curved.heading_at(60.0))
+    assert float(np.degrees(abs(mode.headings[0] - road))) < 5.0
