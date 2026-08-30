@@ -178,6 +178,11 @@ class FrenetLatticePlanner:
         # Seed the polynomials from a *moderate* initial acceleration. Feeding a
         # -7 m/s^2 emergency decel in as an initial condition forces the quintic
         # to swing violently to unwind it, and the whole fan fails feasibility.
+        #
+        # Zeroing it outright at a standstill was tried and is worse: it removes
+        # the continuity the tracker relies on, and the vehicle then accelerates
+        # into situations it should have eased into. Measured across all ten
+        # scenarios it cost progress and produced four collisions.
         s0, s_dot0, s_ddot0, d0, d_dot0, d_ddot0 = state
         state = (s0, s_dot0, float(np.clip(s_ddot0, -3.0, 2.0)),
                  d0, d_dot0, float(np.clip(d_ddot0, -2.0, 2.0)))
