@@ -1,0 +1,58 @@
+name: highway_merge_slow
+description: >
+  PS scenario 3 - a highway merge involving slow-moving vehicles. The ego runs at
+  highway speed into a section carrying heavily loaded trucks doing 6-8 m/s, a
+  tractor-speed pushcart on the shoulder, and two-wheelers filtering between them.
+  The carriageway widens for the merge taper and then closes again, so the ego has
+  to complete its negotiation before the taper ends.
+tags: [required, highway, merge, speed-differential]
+seed: 37
+duration: 90.0
+dt: 0.05
+chaos: 0.30
+
+corridor:
+  geometry:
+    segments:
+      - {type: straight, length: 90}
+      - {type: arc, radius: 220, angle_deg: 22}
+      - {type: straight, length: 90}
+  width:
+    - [0,   5.0, 3.5]
+    - [70,  5.0, 3.5]
+    - [95,  8.2, 3.5]      # merge taper opens
+    - [140, 8.2, 3.5]
+    - [175, 5.0, 3.5]
+    - [270, 5.0, 3.5]
+  road_type: one_way
+  lane_marking_quality: 0.65
+  surface_quality: 0.75
+  defects:
+    - {s: 120, d: 3.0, radius: 1.1, severity: 0.50}
+    - {s: 200, d: 1.0, radius: 0.9, severity: 0.35}
+
+ego: {s: 5.0, d: 1.0, speed: 16.0, goal_s: 255.0}
+
+agents:
+  - {cls: truck, policy: traffic, s: 70,  d: 1.0, speed: 6.5, aggression: 0.75}
+  - {cls: truck, policy: traffic, s: 95,  d: 2.6, speed: 7.0, aggression: 0.75}
+  - {cls: bus,   policy: traffic, s: 130, d: 1.2, speed: 8.5}
+  - {cls: pushcart, policy: traffic, s: 150, d: 6.4, speed: 1.2}
+  # Two-wheelers filtering between the slow heavy vehicles.
+  - {cls: two_wheeler, policy: rash, s: 60,  d: 3.4, speed: 14.0, aggression: 1.5}
+  - {cls: two_wheeler, policy: rash, s: 110, d: 4.5, speed: 13.0, aggression: 1.4}
+  - {cls: auto_rickshaw, policy: sudden_stop, s: 140, d: 5.5, speed: 9.0,
+     args: {stop_at_s: 168.0, hold: 5.0}}
+
+traffic_flow:
+  - {density: 0.055, mix: highway, direction: 1, speed_scale: 0.85}
+
+chaos_effects:
+  wrong_way_riders: 2
+  extra_cattle: 1
+  barricades: 3
+  rash_fraction: 0.40
+  aggression_gain: 0.40
+  pedestrian_recklessness: 0.6
+  marking_degradation: 0.8
+  density_gain: 0.6

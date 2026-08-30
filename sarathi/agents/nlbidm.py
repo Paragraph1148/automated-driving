@@ -30,6 +30,9 @@ from ..core.types import AgentClass, ClassParams
 
 IDM_DELTA = 4.0          # IDM free-flow exponent
 MAX_INTERACTION = 12.0   # clamp on the IDM interaction term, keeps braking finite
+#: Lateral agility below which a class simply does not filter through traffic.
+#: Buses (0.5) and handcarts (0.4) sit below it; autos, cars and two-wheelers above.
+GAP_SEEK_MIN_AGILITY = 0.6
 
 
 @dataclass
@@ -180,7 +183,8 @@ def lateral_accel(cls: AgentClass, params: ClassParams, aggression: float,
             direction = -1.0 if (d - d_min) > 0.5 else 1.0
         accel += 3.2 * overlap * urgency * direction
 
-    if gap_seeking > 0.0 and params.lateral_agility > 0.3 and s_dot > 0.5:
+    if gap_seeking > 0.0 and params.lateral_agility >= GAP_SEEK_MIN_AGILITY \
+            and s_dot > 0.5:
         accel += gap_seeking * _gap_seek(params, s, d, s_dot, neighbours,
                                          d_min, d_max)
 

@@ -1,0 +1,56 @@
+name: cattle_crossing_sudden
+description: >
+  PS scenario 5 - a sudden cattle-crossing event. A well-surfaced two-lane road
+  where the ego is travelling at a genuine cruise speed, so the encounter happens
+  with very little time in hand. A herd emerges from the left verge into the
+  carriageway; the animals do not model the ego at all, and individually they may
+  stop, amble on, or reverse direction mid-crossing. Oncoming traffic removes the
+  option of simply swerving right, which is the whole difficulty of the case.
+tags: [required, cattle, emergency, high-speed]
+seed: 71
+duration: 70.0
+dt: 0.05
+chaos: 0.30
+
+corridor:
+  geometry:
+    segments:
+      - {type: straight, length: 80}
+      - {type: arc, radius: 150, angle_deg: 25}
+      - {type: straight, length: 70}
+  width:
+    - [0,   3.6, 3.6]
+    - [215, 3.6, 3.6]
+  road_type: two_way
+  lane_marking_quality: 0.45
+  surface_quality: 0.70
+  defects:
+    - {s: 150, d: 1.2, radius: 1.0, severity: 0.45}
+
+ego: {s: 4.0, d: 1.6, speed: 14.0, goal_s: 205.0}
+
+agents:
+  # The herd, emerging from the left verge just past the bend.
+  - {cls: cattle, policy: cattle, s: 118, d: 3.0, args: {wander: 0.9, stop_bias: 0.35}}
+  - {cls: cattle, policy: cattle, s: 122, d: 3.4, args: {wander: 0.9, stop_bias: 0.30}}
+  - {cls: cattle, policy: cattle, s: 126, d: 2.6, args: {wander: 1.1, stop_bias: 0.50}}
+  - {cls: cattle, policy: cattle, s: 130, d: 3.3, args: {wander: 0.8, stop_bias: 0.40}}
+  # Oncoming traffic that removes the swerve-right escape.
+  - {cls: truck, policy: oncoming, s: 150, d: -1.8, speed: 11.0}
+  - {cls: car,   policy: oncoming, s: 175, d: -1.6, speed: 12.0}
+  - {cls: two_wheeler, policy: oncoming, s: 138, d: -2.6, speed: 13.0, aggression: 1.3}
+  - {cls: car, policy: traffic, s: 60, d: 1.6, speed: 13.0}
+
+traffic_flow:
+  - {density: 0.030, mix: default, direction: 1}
+  - {density: 0.028, mix: default, direction: -1}
+
+chaos_effects:
+  wrong_way_riders: 2
+  extra_cattle: 3
+  barricades: 1
+  rash_fraction: 0.30
+  aggression_gain: 0.40
+  pedestrian_recklessness: 0.6
+  marking_degradation: 1.0
+  density_gain: 0.4

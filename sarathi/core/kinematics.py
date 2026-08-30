@@ -14,9 +14,11 @@ import numpy as np
 
 from .types import AgentClass, ClassParams, State, wrap_to_pi
 
+#: Classes that can genuinely translate in any direction relative to their body.
+#: A handcart is deliberately *not* here: it has wheels and is pushed, so it
+#: travels along its heading like any other wheeled vehicle, just very slowly.
 HOLONOMIC_CLASSES = frozenset({
     AgentClass.PEDESTRIAN, AgentClass.CATTLE, AgentClass.STRAY_DOG,
-    AgentClass.PUSHCART,
 })
 
 
@@ -50,12 +52,29 @@ def step_bicycle(state: State, accel: float, steer: float, dt: float,
     )
 
 
+#: Maximum rate at which a holonomic agent may rotate, rad/s. A pedestrian can
+#: spin on the spot; a handcart or a cow cannot.
+MAX_YAW_RATE = {
+    AgentClass.PEDESTRIAN: 3.0,
+    AgentClass.STRAY_DOG: 4.0,
+    AgentClass.CATTLE: 1.2,
+    AgentClass.PUSHCART: 0.7,
+}
+#: Below this speed a holonomic agent keeps its heading instead of chasing the
+#: direction of a vanishingly small velocity vector.
+HEADING_HOLD_SPEED = 0.25
+
+
 def step_holonomic(state: State, accel: float, lateral_accel: float, dt: float,
-                   v_max: float, lateral_v_max: float) -> State:
+                   v_max: float, lateral_v_max: float,
+                   max_yaw_rate: float = 2.0) -> State:
     """Advance a holonomic agent (pedestrian, animal, handcart).
 
-    Heading tracks the resultant velocity so the rendered footprint and any
-    heading-conditioned risk kernel stay consistent with where the agent is going.
+    Heading follows the resultant velocity, but only at a bounded slew rate and
+    only above a small speed threshold. Without both guards a handcart being pushed
+    at 0.13 m/s with a little lateral drift ends up crabbing across the road at 50
+    degrees to its direction of travel - which then drives its footprint, its
+    collision checks and any heading-conditioned risk kernel completely wrong.
     """
     v = float(np.clip(state.speed + accel * dt, 0.0, v_max))
     vl = float(np.clip(state.lateral_speed + lateral_accel * dt,
@@ -64,15 +83,24 @@ def step_holonomic(state: State, accel: float, lateral_accel: float, dt: float,
     vx = v * c - vl * s
     vy = v * s + vl * c
     speed_mag = math.hypot(vx, vy)
-    heading = math.atan2(vy, vx) if speed_mag > 1e-3 else state.heading
+
+    if speed_mag > HEADING_HOLD_SPEED:
+        error = float(wrap_to_pi(math.atan2(vy, vx) - state.heading))
+        limit = max_yaw_rate * dt
+        heading = float(wrap_to_pi(state.heading +
+                                   float(np.clip(error, -limit, limit))))
+    else:
+        heading = state.heading
+
+    yaw_rate = float(wrap_to_pi(heading - state.heading)) / dt if dt > 0 else 0.0
     return State(
         x=state.x + vx * dt,
         y=state.y + vy * dt,
-        heading=float(wrap_to_pi(heading)),
+        heading=heading,
         speed=speed_mag,
-        yaw_rate=float(wrap_to_pi(heading - state.heading)) / dt if dt > 0 else 0.0,
+        yaw_rate=yaw_rate,
         accel=accel,
-        lateral_speed=0.0 if speed_mag > 1e-3 else vl,
+        lateral_speed=0.0 if speed_mag > HEADING_HOLD_SPEED else vl,
     )
 
 
@@ -88,7 +116,8 @@ def step_agent(cls: AgentClass, params: ClassParams, state: State,
     if cls in HOLONOMIC_CLASSES:
         return step_holonomic(state, accel, steer_or_lateral, dt,
                               v_max=params.v_desired * 1.6,
-                              lateral_v_max=params.lateral_agility)
+                              lateral_v_max=params.lateral_agility,
+                              max_yaw_rate=MAX_YAW_RATE.get(cls, 2.0))
     max_steer = max_steer_for(cls)
     steer = float(np.clip(steer_or_lateral, -max_steer, max_steer))
     return step_bicycle(state, accel, steer, dt, wheelbase_for(params),
@@ -104,6 +133,7 @@ def max_steer_for(cls: AgentClass) -> float:
         AgentClass.CAR: math.radians(33.0),
         AgentClass.BUS: math.radians(22.0),
         AgentClass.TRUCK: math.radians(24.0),
+        AgentClass.PUSHCART: math.radians(30.0),
     }.get(cls, math.radians(35.0))
 
 

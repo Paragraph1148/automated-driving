@@ -1,0 +1,57 @@
+name: village_road_unmarked
+description: >
+  PS scenario 1 - an unmarked village road. Single narrow carriageway with no lane
+  markings at all, a broken earth-and-patch surface, a blind left-hander, and a
+  culvert that pinches the road to under 4.5 m total. Traffic is bidirectional on a
+  road too narrow for two vehicles to pass comfortably, so every meeting is a
+  negotiation. A pushcart and grazing cattle occupy the carriageway itself.
+tags: [required, village, unmarked, narrow]
+seed: 11
+duration: 90.0
+dt: 0.05
+chaos: 0.35
+
+corridor:
+  geometry:
+    segments:
+      - {type: straight, length: 60}
+      - {type: arc, radius: 45, angle_deg: 50}
+      - {type: straight, length: 70}
+  width:
+    - [0,   2.8, 2.8]
+    - [55,  2.2, 2.2]      # culvert pinch point
+    - [75,  2.2, 2.2]
+    - [110, 3.1, 3.1]
+    - [170, 3.1, 3.1]
+  road_type: two_way
+  lane_marking_quality: 0.0
+  surface_quality: 0.22
+  defects:
+    - {s: 32,  d: 0.9,  radius: 1.2, severity: 0.80}
+    - {s: 48,  d: -0.6, radius: 0.9, severity: 0.55}
+    - {s: 88,  d: 0.4,  radius: 1.4, severity: 0.70}
+    - {s: 130, d: 1.1,  radius: 1.0, severity: 0.45}
+    - {s: 145, d: 0.0,  radius: 1.6, severity: 0.35, kind: speed_breaker}
+
+ego: {s: 4.0, d: 1.2, speed: 7.0, goal_s: 162.0}
+
+agents:
+  - {cls: pushcart,   policy: traffic, s: 70,  d: 1.4, speed: 1.2, aggression: 0.8}
+  - {cls: cattle,     policy: cattle,  s: 96,  d: 0.3}
+  - {cls: bicycle,    policy: traffic, s: 40,  d: 1.8, speed: 3.5}
+  - {cls: two_wheeler, policy: oncoming, s: 120, d: -1.4, speed: 10.0, aggression: 1.3}
+  - {cls: bus,        policy: oncoming, s: 155, d: -1.2, speed: 8.0}
+
+traffic_flow:
+  - {density: 0.035, mix: default, direction: 1}
+  - {density: 0.030, mix: default, direction: -1}
+
+chaos_effects:
+  wrong_way_riders: 2
+  extra_cattle: 2
+  barricades: 1
+  rash_fraction: 0.30
+  aggression_gain: 0.40
+  pedestrian_recklessness: 0.7
+  marking_degradation: 1.0
+  density_gain: 0.5
