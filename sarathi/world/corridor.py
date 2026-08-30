@@ -60,6 +60,12 @@ class Corridor:
     reference: ReferencePath
     left_width: np.ndarray          # per reference sample, metres left of centreline
     right_width: np.ndarray         # per reference sample, metres right of centreline
+    #: Traversable but unmetalled verge either side of the carriageway. Indian
+    #: roads very rarely end at a wall: there is dirt, and drivers use it when a
+    #: bus is coming the other way on a 4.4 m village road. Modelling the edge as
+    #: hard makes those roads impassable in simulation while real traffic flows
+    #: along them all day.
+    shoulder_width: float = 0.9
     lane_marking_quality: float = 0.0   # 0 = none visible, 1 = crisp markings
     surface_quality: float = 0.7        # 0 = broken earth, 1 = new asphalt
     road_type: str = "urban"
@@ -92,6 +98,11 @@ class Corridor:
         left = np.interp(s, ref.s, self.left_width)
         right = np.interp(s, ref.s, self.right_width)
         return -right, left
+
+    def hard_bounds_at(self, s: float | np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Carriageway plus verge - the absolute limit of drivable ground."""
+        d_min, d_max = self.bounds_at(s)
+        return d_min - self.shoulder_width, d_max + self.shoulder_width
 
     def width_at(self, s: float | np.ndarray) -> np.ndarray:
         d_min, d_max = self.bounds_at(s)

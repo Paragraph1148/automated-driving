@@ -114,6 +114,17 @@ def derive_reference_path(corridor: Corridor, ego_s: float, ego_d: float,
         profile[i - 1] = back[i, profile[i]]
     d_profile = d_grid[profile]
 
+    # The edge penalty is finite, so a heavy enough blockage can buy its way off
+    # the carriageway. Clamp instead: driving off the road is not a trade the
+    # planner may make, and an unclamped profile also reports a negative clearance
+    # that pins the behaviour layer in NUDGE for the rest of the run.
+    lo, hi = corridor.bounds_at(s_grid)
+    lo = np.asarray(lo) + ego_half_width
+    hi = np.asarray(hi) - ego_half_width
+    centre = 0.5 * (lo + hi)
+    too_narrow = hi < lo
+    d_profile = np.where(too_narrow, centre, np.clip(d_profile, lo, hi))
+
     xy = _to_world(ref, s_grid, d_profile)
     path = ReferencePath(xy, spacing=0.5, smooth_window=7)
 

@@ -22,8 +22,8 @@ from .recorder import Recorder
 from .view import FrenetView
 
 EGO_ID = 0
-#: How far outside the corridor edge the ego may stray before the run is failed.
-OFF_ROAD_TOLERANCE = 0.6
+#: How far beyond the verge the ego may stray before the run is failed.
+OFF_ROAD_TOLERANCE = 0.25
 #: Agents beyond this distance outside the corridor ends are removed.
 DESPAWN_MARGIN = 30.0
 
@@ -187,7 +187,7 @@ class Simulator:
                 self.finished = True
                 return
 
-        d_min, d_max = self.corridor.bounds_at(s)
+        d_min, d_max = self.corridor.hard_bounds_at(s)
         half_w = self.ego.params.width / 2.0
         if d > float(d_max) - half_w + OFF_ROAD_TOLERANCE or \
                 d < float(d_min) + half_w - OFF_ROAD_TOLERANCE:

@@ -76,7 +76,10 @@ class BehaviourConfig:
     #: always a VRU within 15 m; yielding to mere proximity means never moving.
     vru_time_gap: float = 1.8
     #: Absolute floor: yield to anything vulnerable this close whatever our speed.
-    vru_min_gap: float = 3.0
+    #: Kept near contact range deliberately. At 3 m it fired permanently in dense
+    #: traffic - there is always a two-wheeler within 3 m - which pinned the
+    #: vehicle at the yield speed and gridlocked everything queued behind it.
+    vru_min_gap: float = 1.5
     #: Density above which the market-style creep behaviour engages.
     creep_density: float = 22.0
     #: Free lateral space below which we are "squeezing past something".

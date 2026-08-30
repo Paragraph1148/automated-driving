@@ -28,6 +28,11 @@ from ..core.frenet import ReferencePath
 from .risk import IndianDrivingRiskField
 
 
+#: How far outside the corridor edge a trajectory may stray before it is
+#: rejected. Matches the simulator's own off-road termination tolerance.
+OFF_ROAD_TOLERANCE = 0.2
+
+
 @dataclass
 class LatticeConfig:
     #: Lateral offsets sampled either side of the reference, metres. This is the
@@ -150,15 +155,18 @@ def _poly_eval(coeffs: np.ndarray, t: np.ndarray, order: int = 0) -> np.ndarray:
 class FrenetLatticePlanner:
     """Sample, score, and select a local trajectory."""
 
-    def __init__(self, config: LatticeConfig | None = None):
+    def __init__(self, config: LatticeConfig | None = None,
+                 ego_half_width: float = 0.85):
         self.cfg = config or LatticeConfig()
+        self._ego_half_width = ego_half_width
 
     def plan(self, reference: ReferencePath, state: tuple[float, float, float,
                                                           float, float, float],
              target_speed: float, risk: IndianDrivingRiskField,
              d_bias: float = 0.0,
-             margin_relief: float = 0.0) -> tuple[Candidate | None,
-                                                  list[Candidate]]:
+             margin_relief: float = 0.0,
+             lateral_limits: tuple[float, float] | None = None
+             ) -> tuple[Candidate | None, list[Candidate]]:
         """Plan from Frenet state ``(s, s_dot, s_ddot, d, d_dot, d_ddot)``.
 
         Returns ``(best, all_candidates)``. All candidates are returned so the
@@ -173,7 +181,7 @@ class FrenetLatticePlanner:
         s0, s_dot0, s_ddot0, d0, d_dot0, d_ddot0 = state
         state = (s0, s_dot0, float(np.clip(s_ddot0, -3.0, 2.0)),
                  d0, d_dot0, float(np.clip(d_ddot0, -2.0, 2.0)))
-        batch = self._sample(state, target_speed, d_bias, times)
+        batch = self._sample(state, target_speed, d_bias, times, lateral_limits)
         self._lift(batch, reference, times)
         self._feasibility(batch, times)
         self._score(batch, risk, times, target_speed, margin_relief)
@@ -240,13 +248,19 @@ class FrenetLatticePlanner:
                 min_probability=cfg.hard_constraint_probability,
                 margin_relief=margin_relief)[0]) > 0.0
             for i in range(len(times)))
-        cand.feasible = not blocked
-        cand.reject_reason = "" if not blocked else "collision"
+        c_s, c_d = risk.corridor.to_frenet_batch(xy)
+        d_min, d_max = risk.corridor.hard_bounds_at(c_s)
+        off = bool(np.any((c_d > d_max - self._ego_half_width + OFF_ROAD_TOLERANCE) |
+                          (c_d < d_min + self._ego_half_width - OFF_ROAD_TOLERANCE)))
+        cand.feasible = not (blocked or off)
+        cand.reject_reason = ("" if cand.feasible
+                              else ("off road" if off else "collision"))
         cand.cost = cfg.w_risk * cand.risk
         return cand
 
     # -- stage 1: sample the lattice, batched -----------------------------
-    def _sample(self, state, target_speed, d_bias, times) -> dict:
+    def _sample(self, state, target_speed, d_bias, times,
+                lateral_limits=None) -> dict:
         cfg = self.cfg
         s0, s_dot0, s_ddot0, d0, d_dot0, d_ddot0 = state
         speeds = np.array(sorted({
@@ -272,8 +286,15 @@ class FrenetLatticePlanner:
                                       cfg.min_lateral_span, cfg.lateral_span))
             desired = np.linspace(-cfg.lateral_span, cfg.lateral_span,
                                   cfg.lateral_samples) + d_bias
-            offsets = np.unique(np.round(
-                d0 + np.clip(desired - d0, -max_shift, max_shift), 3))
+            offsets = d0 + np.clip(desired - d0, -max_shift, max_shift)
+            if lateral_limits is not None:
+                # Generate inside the carriageway rather than generating outside
+                # it and discarding afterwards. On a 4.4 m village road the
+                # discard-after approach throws away most of the fan and leaves
+                # the planner with nothing to choose between.
+                lo, hi = lateral_limits
+                offsets = np.clip(offsets, min(lo, hi), max(lo, hi))
+            offsets = np.unique(np.round(offsets, 3))
             for target_d in offsets:
                 lat_coeffs.append(quintic(d0, d_dot0, d_ddot0, float(target_d),
                                           0.0, 0.0, duration))
@@ -403,9 +424,23 @@ class FrenetLatticePlanner:
         values = np.empty(xy.shape[:2])
         blocked = np.zeros(len(live), dtype=bool)
 
-        # One vectorised pass per timestep across every surviving candidate.
+        # Project into *corridor* coordinates for the terrain term. ``s`` and ``d``
+        # here are offsets along the derived reference, which is a different curve
+        # whenever it deviates around an obstruction - feeding those in made the
+        # boundary cost measure the wrong road.
+        corridor = risk.corridor
+        c_s, c_d = corridor.to_frenet_batch(xy.reshape(-1, 2))
         terrain = risk.terrain_risk(xy.reshape(-1, 2),
-                                    sd=(s.ravel(), d.ravel())).reshape(xy.shape[:2])
+                                    sd=(c_s, c_d)).reshape(xy.shape[:2])
+
+        # Leaving the carriageway is a hard constraint, not a cost. The simulator
+        # ends a run for it, so the planner must not be able to buy its way out
+        # of the corridor by paying a finite penalty.
+        d_min, d_max = corridor.hard_bounds_at(c_s)
+        half_w = self._ego_half_width
+        outside = ((c_d > d_max - half_w + OFF_ROAD_TOLERANCE) |
+                   (c_d < d_min + half_w - OFF_ROAD_TOLERANCE)).reshape(xy.shape[:2])
+        leaves_road = outside.any(axis=1)
         for ti, t_value in enumerate(times):
             pts = xy[:, ti, :]
             values[:, ti] = risk.agent_risk(pts, float(t_value))
@@ -415,13 +450,15 @@ class FrenetLatticePlanner:
                 margin_relief=margin_relief) > 0.0
         values = np.minimum(values + terrain, risk.cfg.risk_cap)
 
-        newly = blocked
         for i, idx in enumerate(live):
-            if newly[i]:
+            if leaves_road[i]:
+                batch["feasible"][idx] = False
+                batch["reason"][idx] = "off road"
+            elif blocked[i]:
                 batch["feasible"][idx] = False
                 batch["reason"][idx] = "collision"
 
-        keep = ~blocked
+        keep = ~(blocked | leaves_road)
         if not np.any(keep):
             return
         idx = live[keep]

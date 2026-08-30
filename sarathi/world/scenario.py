@@ -291,8 +291,14 @@ def populate(scenario: Scenario, rng: np.random.Generator
             p = params_for(cls)
             # Rejection-sample a spot that is actually empty.
             spot = None
+            # Leave room at the end the flow is heading toward: an agent spawned
+            # 0.5 m from the corridor end despawns on the next tick, which reads
+            # in the viewer as traffic that appears and freezes.
+            margin = 18.0
+            lo_s = margin if flow.direction < 0 else 0.0
+            hi_s = ref.length - (margin if flow.direction > 0 else 0.0)
             for _attempt in range(16):
-                s_try = float(rng.uniform(0.0, ref.length))
+                s_try = float(rng.uniform(lo_s, max(lo_s + 1.0, hi_s)))
                 d_min_t, d_max_t = corridor.bounds_at(s_try)
                 lo_t, hi_t = (0.2, float(d_max_t)) if flow.direction > 0 else \
                              (float(d_min_t), -0.2)

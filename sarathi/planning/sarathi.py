@@ -66,7 +66,8 @@ class SarathiController(EgoController):
                  corridor_path: CorridorPathConfig | None = None,
                  seed: int = 0):
         self.cfg = config or SarathiConfig()
-        self.lattice = FrenetLatticePlanner(lattice)
+        self.lattice = FrenetLatticePlanner(
+            lattice, ego_half_width=params_for(AgentClass.CAR).width / 2.0)
         self.behaviour = BehaviourPlanner(
             behaviour or BehaviourConfig(desired_speed=self.cfg.desired_speed))
         self.risk_cfg = risk or RiskConfig()
@@ -141,10 +142,17 @@ class SarathiController(EgoController):
         relief = {Behaviour.CREEP: 0.30, Behaviour.NUDGE: 0.22,
                   Behaviour.YIELD: 0.10}.get(decision.state, 0.0)
         self._margin_relief = relief
+        # Lateral room available around the derived reference, expressed in that
+        # reference's own frame, so the lattice only ever proposes in-road offsets.
+        half_w = self.params.width / 2.0
+        d_lo_c, d_hi_c = corridor.hard_bounds_at(s_ego)
+        limits = (float(d_lo_c) + half_w - d_ego + rd,
+                  float(d_hi_c) - half_w - d_ego + rd)
         best, candidates = self.lattice.plan(self.reference, state,
                                              decision.target_speed, field,
                                              d_bias=decision.d_bias,
-                                             margin_relief=relief)
+                                             margin_relief=relief,
+                                             lateral_limits=limits)
         self.candidates = candidates
 
         if best is None:

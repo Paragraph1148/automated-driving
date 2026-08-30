@@ -245,7 +245,8 @@ class IndianDrivingRiskField:
             s, d = np.asarray(sd[0], dtype=float), np.asarray(sd[1], dtype=float)
 
         d_min, d_max = self.corridor.bounds_at(s)
-        # Distance from the point to the nearest edge, accounting for ego width.
+        # Distance from the metalled edge, accounting for ego width. Negative
+        # means we are on the verge - costly, and slow, but not forbidden.
         slack = np.minimum(d - (d_min + self.ego_half_w),
                            (d_max - self.ego_half_w) - d)
         # Ramps up as the ego approaches the verge, and keeps climbing beyond it,
