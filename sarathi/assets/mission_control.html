@@ -190,8 +190,9 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
     <div id="place-panel" hidden>
       <h2>Drop a road user</h2>
       <p style="margin:0 0 9px;color:var(--ink-2);font-size:12.5px">
-        Click the map to place. Shift-click removes. The planner has no
-        foreknowledge of anything you add.</p>
+        <b>Drag</b> any vehicle to reposition it while the world runs.
+        Click empty road to place. Shift-click removes. The planner has no
+        foreknowledge of anything you do.</p>
       <div class="palette" id="palette"></div>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
         <button id="restart-ego">Reset vehicle</button>
@@ -434,8 +435,17 @@ function draw(){
     }
   }
 
-  if (on.truth) for (const a of f.agents)
-    drawBody(T, a.x, a.y, a.h, a.l, a.w, hueFor(a.cls), css("--surface-1"), 1);
+  if (on.truth) for (const a of f.agents){
+    const held = heldIds.includes(a.id);
+    drawBody(T, a.x, a.y, a.h, a.l, a.w, hueFor(a.cls),
+             held ? css("--accent") : css("--surface-1"), held ? 2.5 : 1);
+    if (held){
+      const c = T(a.x, a.y);
+      ctx.beginPath(); ctx.arc(c[0], c[1], Math.max(14, 1.1*scale), 0, Math.PI*2);
+      ctx.strokeStyle = css("--accent"); ctx.lineWidth = 1.5;
+      ctx.setLineDash([4,4]); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
 
   if (on.tracks && f.tracks) for (const t of f.tracks){
     const c = T(t.x,t.y);
@@ -534,6 +544,21 @@ const PLACEABLE = [
   ["parked_vehicle","Parked car", "static",   0.0],
 ];
 let placeIdx = 0, ws = null, lastFrame = null;
+let dragId = null, dragMoved = false, heldIds = [];
+
+// Hit-test in the browser rather than round-tripping to the server: grabbing a
+// vehicle has to feel instant, and the frame already carries every position.
+function agentAt(pt){
+  const f = lastFrame; if (!f) return null;
+  let best = null, bestDist = 3.5;
+  const all = f.ego && f.ego.id !== undefined ? [f.ego].concat(f.agents) : f.agents;
+  for (const a of all){
+    const reach = Math.max(a.l || 1, a.w || 1) / 2;
+    const d = Math.hypot(a.x - pt[0], a.y - pt[1]) - reach;
+    if (d < bestDist){ best = a; bestDist = d; }
+  }
+  return best;
+}
 
 function screenToWorld(px, py){
   const f = lastFrame || frame(); if (!f) return null;
@@ -657,6 +682,13 @@ function startLive(){
     }
     if (msg.values){ syncTuning(msg.values); return; }
     if (msg.tuned){ return; }
+    if ("grabbed" in msg){
+      // The server refused the grab (the agent went away between the press and
+      // the message arriving); drop the local drag so the cursor is not stuck.
+      if (msg.grabbed === null){ dragId = null; cv.style.cursor = "crosshair"; }
+      return;
+    }
+    if (msg.t === undefined) return;
     if (msg.events && msg.events.length){
       const last = msg.events[msg.events.length-1];
       document.getElementById("chip-events").hidden = false;
@@ -664,24 +696,62 @@ function startLive(){
         `${last.kind} · ${last.detail} @ ${last.t}s`;
     }
     lastFrame = msg; frames = [msg]; idx = 0;
+    heldIds = msg.held || [];
     document.getElementById("live-clock").textContent = `${msg.t.toFixed(1)} s`;
     document.getElementById("m-outcome").textContent = "running";
     draw();
   });
 
-  cv.addEventListener("click", e => {
-    if (!ws || ws.readyState !== 1) return;
+  const worldAt = e => {
     const r = cv.getBoundingClientRect();
-    const pt = screenToWorld(e.clientX - r.left, e.clientY - r.top);
-    if (!pt) return;
-    if (e.shiftKey){
-      ws.send(JSON.stringify({cmd:"remove", x:pt[0], y:pt[1]}));
-    } else {
-      const [cls,,policy,speed] = PLACEABLE[placeIdx];
-      ws.send(JSON.stringify({cmd:"place", cls, x:pt[0], y:pt[1], policy, speed}));
+    return screenToWorld(e.clientX - r.left, e.clientY - r.top);
+  };
+
+  cv.addEventListener("pointerdown", e => {
+    const pt = worldAt(e); if (!pt) return;
+    const hit = agentAt(pt);
+    dragMoved = false;
+    if (hit && !e.shiftKey){
+      dragId = hit.id;
+      cv.setPointerCapture(e.pointerId);
+      cv.style.cursor = "grabbing";
+      send({cmd:"grab", id: hit.id});
     }
   });
+
+  cv.addEventListener("pointermove", e => {
+    const pt = worldAt(e); if (!pt) return;
+    if (dragId !== null){
+      dragMoved = true;
+      send({cmd:"drag", id: dragId, x: pt[0], y: pt[1]});
+    } else {
+      cv.style.cursor = agentAt(pt) ? "grab" : "crosshair";
+    }
+  });
+
+  const endDrag = e => {
+    const pt = worldAt(e);
+    if (dragId !== null){
+      send({cmd:"drop", id: dragId});
+      dragId = null;
+      cv.style.cursor = "crosshair";
+      return;
+    }
+    // A press that grabbed nothing and did not move is a placement.
+    if (!pt || dragMoved) return;
+    if (e.shiftKey) send({cmd:"remove", x:pt[0], y:pt[1]});
+    else {
+      const [cls,,policy,speed] = PLACEABLE[placeIdx];
+      send({cmd:"place", cls, x:pt[0], y:pt[1], policy, speed});
+    }
+  };
+  cv.addEventListener("pointerup", endDrag);
+  cv.addEventListener("pointercancel", () => {
+    if (dragId !== null){ send({cmd:"drop", id: dragId}); dragId = null; }
+    cv.style.cursor = "crosshair";
+  });
   cv.style.cursor = "crosshair";
+  cv.style.touchAction = "none";
 
   document.getElementById("tune-reset").addEventListener("click", () =>
     send({cmd:"reset_tuning"}));

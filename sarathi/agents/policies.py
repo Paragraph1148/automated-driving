@@ -135,15 +135,26 @@ class WrongWayPolicy(TrafficPolicy):
 
     direction = -1
 
+    #: Speed below which the rider stops deferring and starts squeezing through.
+    #: A wrong-way rider who queues politely behind the traffic coming at them is
+    #: not a wrong-way rider - they weave, which is precisely what makes them
+    #: dangerous and what the ego has to cope with. Without this floor they meet
+    #: the first oncoming vehicle, stop, and stay stopped for the rest of the run.
+    crawl_speed: float = 2.5
+
     def __init__(self, edge_hug: float = 0.75, obliviousness: float = 0.7):
-        super().__init__(gap_seeking=0.3)
+        super().__init__(gap_seeking=1.6)
         self.edge_hug = edge_hug
         self.obliviousness = obliviousness
 
     def act(self, agent, ctx, rng):
         mirrored = _mirror_context(ctx)
-        # Hug the edge of the carriageway it is illegally occupying.
-        edge = mirrored.d_max * self.edge_hug
+        # Hug the edge of the carriageway it is illegally occupying - which is the
+        # ego's side, where it already is. Reading d_max in the mirrored frame
+        # named the *opposite* verge, so the rider was commanded to cross the
+        # whole road; the steer that takes at low speed is large and sustained,
+        # and it simply turned around and drove off the right way.
+        edge = mirrored.d_min * self.edge_hug
         mirrored = _replace_ctx(mirrored, d_nominal=edge)
         # Largely ignores what is in front of it until very close.
         near = [nb for nb in mirrored.neighbours
@@ -151,6 +162,10 @@ class WrongWayPolicy(TrafficPolicy):
         mirrored = _replace_ctx(mirrored, neighbours=near)
         self.target_offset = edge
         accel, steer = super().act(agent, mirrored, rng)
+        # Never let deference bring them to a halt: below a crawl they push on
+        # and rely on everyone else to make room, which is what they do.
+        if mirrored.s_dot < self.crawl_speed and accel < 0.0:
+            accel = max(accel, 0.35 * agent.params.a_max)
         return accel, -steer
 
 

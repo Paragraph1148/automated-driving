@@ -27,6 +27,10 @@ EGO_ID = 0
 OFF_ROAD_TOLERANCE = 0.25
 #: Agents beyond this distance outside the corridor ends are removed.
 DESPAWN_MARGIN = 30.0
+#: How far a wheeled road user's heading may deviate from its direction of travel
+#: along the road, radians. Generous enough for lane changes and filtering,
+#: tight enough that a U-turn is impossible.
+HEADING_CONE = math.radians(70.0)
 
 
 @dataclass
@@ -66,6 +70,10 @@ class Simulator:
         #: something goes wrong is a demo nobody can explore.
         self.live = live
         self.events: list[dict] = []
+        #: Agents currently held by the operator's mouse. They are exempt from
+        #: their policy and from integration, so the world keeps running around
+        #: a vehicle being positioned by hand.
+        self.held: set[int] = set()
         self.finished = False
         self.outcome = ""
         self._collision_with: str | None = None
@@ -112,6 +120,47 @@ class Simulator:
         self.agents[agent_id] = agent
         self.policies[agent_id] = build_policy(policy)
         return agent_id
+
+    def agent_near(self, x: float, y: float,
+                   radius: float = 4.0) -> int | None:
+        """Id of the road user nearest a point, ego included. None if nothing close."""
+        point = np.array([x, y], dtype=float)
+        best, best_dist = None, radius
+        for aid, agent in self.agents.items():
+            if not agent.active:
+                continue
+            # Measure to the body, so a bus is grabbable anywhere along its length.
+            reach = max(agent.params.length, agent.params.width) / 2.0
+            dist = float(np.linalg.norm(agent.state.position - point)) - reach
+            if dist < best_dist:
+                best, best_dist = aid, dist
+        return best
+
+    def hold(self, agent_id: int) -> bool:
+        if agent_id in self.agents and self.agents[agent_id].active:
+            self.held.add(agent_id)
+            return True
+        return False
+
+    def move_held(self, agent_id: int, x: float, y: float,
+                  face_motion: bool = True) -> None:
+        """Place a held agent, pointing it the way the hand is moving."""
+        agent = self.agents.get(agent_id)
+        if agent is None or agent_id not in self.held:
+            return
+        dx = float(x) - agent.state.x
+        dy = float(y) - agent.state.y
+        agent.state.x, agent.state.y = float(x), float(y)
+        # A dragged vehicle should point where it is being dragged, but not spin
+        # on tiny jitters, and the ego keeps its heading so the operator can
+        # reposition it without re-aiming it.
+        if face_motion and agent_id != EGO_ID and math.hypot(dx, dy) > 0.35:
+            agent.state.heading = math.atan2(dy, dx)
+        agent.state.speed = 0.0
+        agent.state.lateral_speed = 0.0
+
+    def release(self, agent_id: int) -> None:
+        self.held.discard(agent_id)
 
     def despawn_near(self, x: float, y: float, radius: float = 3.0) -> int | None:
         """Remove the nearest road user to a point. Never the ego."""
@@ -165,12 +214,13 @@ class Simulator:
         #    it reacts to the ego only through ordinary NLB-IDM interactions.
         commands: dict[int, tuple[float, float]] = {}
         for aid, agent in self.agents.items():
-            if aid == EGO_ID or not agent.active:
+            if aid == EGO_ID or not agent.active or aid in self.held:
                 continue
             commands[aid] = self._agent_command(agent, view)
 
         # 3. Integrate. Ego first so its recorded state matches the command above.
-        self._integrate_ego(cmd)
+        if EGO_ID not in self.held:
+            self._integrate_ego(cmd)
         for aid, (accel, lateral) in commands.items():
             agent = self.agents[aid]
             agent.state = step_agent(agent.cls, agent.params, agent.state,
@@ -224,6 +274,7 @@ class Simulator:
             if aid == EGO_ID or not agent.active or agent.is_static:
                 continue
             s, d = ref.to_frenet(agent.state.position)
+            self._hold_heading(agent, aid, s)
             lo, hi = self.corridor.hard_bounds_at(s)
             half_w = agent.params.width / 2.0
             lo, hi = float(lo) + half_w, float(hi) - half_w
@@ -237,6 +288,35 @@ class Simulator:
             # Bleed off the lateral velocity that carried it out, so it settles
             # against the edge instead of grinding along it.
             agent.state.lateral_speed = 0.0
+
+    def _hold_heading(self, agent: Agent, agent_id: int, s: float) -> None:
+        """Keep a road user pointed roughly along its direction of travel.
+
+        The lateral controller reaches a desired offset by steering, and the steer
+        needed grows as speed falls - so a slow agent with a distant lateral target
+        can accumulate a full U-turn and then drive away in the wrong direction,
+        which is what happened to the wrong-way riders. Traffic does not make
+        U-turns mid-block; clamping the heading to a generous cone around the road
+        makes that structurally impossible rather than a matter of tuning.
+
+        Pedestrians and animals are exempt: turning on the spot is exactly what
+        they do.
+        """
+        from ..core.kinematics import HOLONOMIC_CLASSES
+
+        if agent.cls in HOLONOMIC_CLASSES:
+            return
+        policy = self.policies.get(agent_id)
+        direction = getattr(policy, "direction", 1)
+        road = float(self.corridor.reference.heading_at(s))
+        if direction < 0:
+            road += math.pi
+        error = float(np.arctan2(np.sin(agent.state.heading - road),
+                                 np.cos(agent.state.heading - road)))
+        if abs(error) <= HEADING_CONE:
+            return
+        agent.state.heading = float(
+            road + math.copysign(HEADING_CONE, error))
 
     def _despawn(self) -> None:
         length = self.corridor.reference.length

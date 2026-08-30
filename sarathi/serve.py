@@ -114,6 +114,22 @@ class LiveSession:
         with self.lock:
             return self.sim.despawn_near(x, y, radius=4.0)
 
+    def grab(self, agent_id: int | None = None, x: float = 0.0,
+             y: float = 0.0) -> int | None:
+        with self.lock:
+            found = agent_id if agent_id is not None else self.sim.agent_near(x, y)
+            if found is not None and self.sim.hold(int(found)):
+                return int(found)
+            return None
+
+    def drag(self, agent_id: int, x: float, y: float) -> None:
+        with self.lock:
+            self.sim.move_held(agent_id, x, y)
+
+    def drop(self, agent_id: int) -> None:
+        with self.lock:
+            self.sim.release(agent_id)
+
     def frame(self) -> dict:
         with self.lock:
             sim = self.sim
@@ -135,6 +151,7 @@ class LiveSession:
                        if hasattr(sim.controller, "_debug_cache") else {}}
             payload.update(planner_snapshot(sim.controller, ego))
             payload["events"] = list(sim.events)
+            payload["held"] = sorted(sim.held)
             payload["paused"] = self.paused
             return payload
 
@@ -190,6 +207,14 @@ async def _handle(session: LiveSession, websocket) -> None:
                               msg.get("policy"), msg.get("speed"))
             elif cmd == "remove":
                 session.remove(msg["x"], msg["y"])
+            elif cmd == "grab":
+                found = session.grab(msg.get("id"), msg.get("x", 0.0),
+                                     msg.get("y", 0.0))
+                await websocket.send(json.dumps({"grabbed": found}))
+            elif cmd == "drag":
+                session.drag(int(msg["id"]), msg["x"], msg["y"])
+            elif cmd == "drop":
+                session.drop(int(msg["id"]))
             elif cmd == "pause":
                 session.paused = bool(msg.get("value", True))
             elif cmd == "rate":
