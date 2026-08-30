@@ -172,7 +172,8 @@ class IndianDrivingRiskField:
                           self.cfg.risk_cap)
 
     def penetration(self, points: np.ndarray, t: float,
-                    min_probability: float = 0.05) -> np.ndarray:
+                    min_probability: float = 0.05,
+                    margin_relief: float = 0.0) -> np.ndarray:
         """Depth (m) by which each point intrudes into a predicted body.
 
         The soft risk field ranks trajectories; it must not be asked to *forbid*
@@ -191,6 +192,15 @@ class IndianDrivingRiskField:
             return np.zeros(len(points))
 
         mu, heading, sl, sw, _, _ = self._slice_at(t)
+        # ``margin_relief`` shrinks the comfort margin - never the physical bodies.
+        # In a dense market the ego is boxed in by margins alone, and a planner
+        # that will not trade clearance for progress simply stops for good. Human
+        # drivers accept far smaller gaps as space runs out; so do we, with the
+        # RSS supervisor still enforcing the floor underneath.
+        if margin_relief > 0.0:
+            relief = min(margin_relief, self.cfg.ego_margin)
+            sl = np.maximum(sl - relief, 0.05)
+            sw = np.maximum(sw - relief, 0.05)
         active = self._mode_probability >= min_probability
         if not np.any(active):
             return np.zeros(len(points))

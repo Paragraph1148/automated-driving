@@ -12,11 +12,13 @@ import sys
 from pathlib import Path
 
 from .planning.baseline import BaselineLaneFollower
+from .planning.sarathi import SarathiController
 from .sim.simulator import Simulator
 from .world.scenario import load_scenario
 
 CONTROLLERS = {
     "baseline": BaselineLaneFollower,
+    "sarathi": SarathiController,
 }
 
 
@@ -69,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
 
     run = sub.add_parser("run", help="run one or more scenarios")
     run.add_argument("scenarios", nargs="+")
-    run.add_argument("--controller", default="baseline")
+    run.add_argument("--controller", default="sarathi")
     run.add_argument("--chaos", type=float, default=None,
                      help="override the scenario chaos level, 0..1")
     run.add_argument("--seed", type=int, default=None)
