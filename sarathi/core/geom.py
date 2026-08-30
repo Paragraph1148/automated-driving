@@ -71,6 +71,45 @@ def project_point_to_polyline(pts: np.ndarray, s: np.ndarray,
     return s_proj, d_signed, i
 
 
+def project_points_to_polyline(pts: np.ndarray, s: np.ndarray,
+                               queries: np.ndarray,
+                               chunk: int = 4096
+                               ) -> tuple[np.ndarray, np.ndarray]:
+    """Vectorised projection of many points onto one polyline.
+
+    Same result as calling :func:`project_point_to_polyline` per point, but as a
+    single batched operation. This is on the planner's hot path - scoring a fan of
+    candidate trajectories means projecting a few thousand points every tick - and
+    the per-point Python loop it replaces cost over 100 ms per call.
+
+    Returns ``(s_proj, d_signed)`` arrays.
+    """
+    queries = np.atleast_2d(np.asarray(queries, dtype=float))
+    a = pts[:-1]
+    b = pts[1:]
+    ab = b - a
+    seg_len_sq = np.einsum("ij,ij->i", ab, ab)
+    seg_len_sq = np.maximum(seg_len_sq, 1e-12)
+    seg_len = np.sqrt(seg_len_sq)
+    tangent = ab / seg_len[:, None]
+    normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
+
+    out_s = np.empty(len(queries))
+    out_d = np.empty(len(queries))
+    for start in range(0, len(queries), chunk):
+        q = queries[start:start + chunk]
+        ap = q[:, None, :] - a[None, :, :]                        # (n, M, 2)
+        t = np.clip(np.einsum("nmj,mj->nm", ap, ab) / seg_len_sq, 0.0, 1.0)
+        proj = a[None, :, :] + t[..., None] * ab[None, :, :]
+        diff = q[:, None, :] - proj
+        i = np.argmin(np.einsum("nmj,nmj->nm", diff, diff), axis=1)
+
+        rows = np.arange(len(q))
+        out_s[start:start + chunk] = s[i] + t[rows, i] * seg_len[i]
+        out_d[start:start + chunk] = np.einsum("nj,nj->n", diff[rows, i], normal[i])
+    return out_s, out_d
+
+
 def _project_polygon(poly: np.ndarray, axis: np.ndarray) -> tuple[float, float]:
     proj = poly @ axis
     return float(proj.min()), float(proj.max())

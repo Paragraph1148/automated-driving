@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 from .geom import (polyline_arclength, polyline_curvature, polyline_tangents,
                    project_point_to_polyline, resample_polyline)
@@ -39,6 +40,19 @@ class ReferencePath:
         self.curvature = polyline_curvature(pts, self.s)
         self.length = float(self.s[-1])
 
+        # Segment geometry and a vertex KD-tree, both precomputed once. Batched
+        # projection is the planner's hottest path: scoring a fan of candidate
+        # trajectories projects a few thousand points per tick, and scanning every
+        # segment for every point cost ~70 ms per call.
+        self._seg_a = pts[:-1]
+        self._seg_ab = pts[1:] - pts[:-1]
+        self._seg_len_sq = np.maximum(
+            np.einsum("ij,ij->i", self._seg_ab, self._seg_ab), 1e-12)
+        self._seg_len = np.sqrt(self._seg_len_sq)
+        tangent = self._seg_ab / self._seg_len[:, None]
+        self._seg_normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
+        self._tree = cKDTree(pts)
+
     # -- sampling ---------------------------------------------------------
     def point_at(self, s: float | np.ndarray) -> np.ndarray:
         s = np.clip(s, 0.0, self.length)
@@ -61,6 +75,43 @@ class ReferencePath:
     def to_frenet(self, point: np.ndarray) -> tuple[float, float]:
         s, d, _ = project_point_to_polyline(self.points, self.s,
                                             np.asarray(point, dtype=float))
+        return s, d
+
+    def to_frenet_batch(self, queries: np.ndarray
+                        ) -> tuple[np.ndarray, np.ndarray]:
+        """Project many world points into Frenet coordinates at once.
+
+        Finds the nearest polyline *vertex* with a KD-tree, then solves exactly on
+        the (at most two) segments incident to it. With the path resampled to 0.5 m
+        the true closest point always lies on one of those two, so this is exact,
+        not an approximation.
+        """
+        queries = np.atleast_2d(np.asarray(queries, dtype=float))
+        n_seg = len(self._seg_a)
+        _, vertex = self._tree.query(queries)
+        vertex = np.asarray(vertex, dtype=int)
+
+        left = np.clip(vertex - 1, 0, n_seg - 1)
+        right = np.clip(vertex, 0, n_seg - 1)
+
+        def solve(seg: np.ndarray):
+            a = self._seg_a[seg]
+            ab = self._seg_ab[seg]
+            t = np.clip(np.einsum("nj,nj->n", queries - a, ab) /
+                        self._seg_len_sq[seg], 0.0, 1.0)
+            proj = a + t[:, None] * ab
+            diff = queries - proj
+            return t, np.einsum("nj,nj->n", diff, diff), diff
+
+        t_l, d2_l, diff_l = solve(left)
+        t_r, d2_r, diff_r = solve(right)
+        take_left = d2_l < d2_r
+        seg = np.where(take_left, left, right)
+        t = np.where(take_left, t_l, t_r)
+        diff = np.where(take_left[:, None], diff_l, diff_r)
+
+        s = self.s[seg] + t * self._seg_len[seg]
+        d = np.einsum("nj,nj->n", diff, self._seg_normal[seg])
         return s, d
 
     def to_cartesian(self, s: float | np.ndarray,

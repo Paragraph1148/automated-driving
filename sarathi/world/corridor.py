@@ -97,6 +97,10 @@ class Corridor:
         d_min, d_max = self.bounds_at(s)
         return d_max - d_min
 
+    def to_frenet_batch(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Project many world points into corridor-Frenet coordinates at once."""
+        return self.reference.to_frenet_batch(points)
+
     def contains(self, point: np.ndarray) -> bool:
         s, d = self.reference.to_frenet(np.asarray(point, dtype=float))
         d_min, d_max = self.bounds_at(s)
