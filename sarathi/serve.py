@@ -20,24 +20,23 @@ import json
 import threading
 import time
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .core.types import AgentClass
+from .paths import scenario_dir, viewer_template
 from .planning.sarathi import SarathiController
 from .sim.simulator import Simulator
 from .sim.snapshot import planner_snapshot
 from .world.scenario import load_scenario
 
-SCENARIO_DIR = Path("scenarios")
-VIZ_DIR = Path(__file__).resolve().parent.parent / "viz"
 
 
 class LiveSession:
     """One running simulation, driven by the browser."""
 
     def __init__(self, scenario: str, chaos: float | None = None,
-                 seed: int | None = None):
+                 seed: int | None = None, scenarios: str | None = None):
+        self.scenario_dir = scenario_dir(scenarios)
         self.lock = threading.Lock()
         self.paused = False
         self.rate = 1.0
@@ -45,7 +44,7 @@ class LiveSession:
 
     def load(self, scenario: str, chaos: float | None = None,
              seed: int | None = None) -> None:
-        path = SCENARIO_DIR / f"{scenario}.yaml"
+        path = self.scenario_dir / f"{scenario}.yaml"
         if not path.exists():
             raise FileNotFoundError(path)
         sc = load_scenario(path, chaos=chaos, seed=seed)
@@ -114,7 +113,7 @@ class LiveSession:
             return {"mode": "live", "scenario": self.scenario_name,
                     "chaos": self.chaos, "scene": self.scene,
                     "scenarios": sorted(p.stem for p in
-                                        SCENARIO_DIR.glob("*.yaml"))}
+                                        self.scenario_dir.glob("*.yaml"))}
 
 
 def _scene_payload(corridor) -> dict:
@@ -172,51 +171,57 @@ async def _handle(session: LiveSession, websocket) -> None:
         pump.cancel()
 
 
-def _write_live_page(port: int) -> None:
-    """Render the shared template in live mode.
+def _live_page(port: int) -> bytes:
+    """Render the shared viewer template in live mode.
 
-    The same file serves the recorded artifact and this page; only the injected
-    payload differs. Keeping one renderer means the demo a judge drives and the
-    page shared afterwards cannot drift apart.
+    The same template serves the recorded artifact and this page; only the
+    injected payload differs, so the demo a judge drives and the page shared
+    afterwards cannot drift apart. Rendered in memory rather than written to
+    disk, because an installed package's directory may not be writable.
     """
-    template = (VIZ_DIR / "mission_control.html").read_text()
     payload = json.dumps({"mode": "live", "port": port})
-    (VIZ_DIR / "live.html").write_text(
-        template.replace("__RUN_DATA__", payload))
+    return viewer_template().replace("__RUN_DATA__", payload).encode("utf-8")
 
 
-class _Utf8Handler(SimpleHTTPRequestHandler):
-    """Static handler that declares UTF-8.
+class _PageHandler(BaseHTTPRequestHandler):
+    """Serves exactly one page, with an explicit charset.
 
-    Python's default guesses the charset from the file extension alone, so the
-    browser falls back to latin-1 and every em dash and infinity sign in the page
-    renders as mojibake.
+    The charset is not optional: without it the browser falls back to latin-1 and
+    every em dash and infinity sign in the telemetry renders as mojibake.
     """
 
-    def guess_type(self, path):
-        base = super().guess_type(path)
-        if isinstance(base, str) and base.startswith("text/"):
-            return f"{base}; charset=utf-8"
-        return base
+    page: bytes = b""
+
+    def do_GET(self):
+        if self.path in ("/", "/index.html", "/live.html"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(self.page)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(self.page)
+        else:
+            self.send_error(404)
 
     def log_message(self, *args):
         pass
 
 
-def _serve_static(port: int) -> None:
-    handler = partial(_Utf8Handler, directory=str(VIZ_DIR))
+def _serve_static(port: int, page: bytes) -> None:
+    handler = type("_Bound", (_PageHandler,), {"page": page})
     ThreadingHTTPServer(("127.0.0.1", port), handler).serve_forever()
 
 
 def run(scenario: str = "village_road_unmarked", chaos: float | None = None,
-        seed: int | None = None, port: int = 8420) -> None:
+        seed: int | None = None, port: int = 8420,
+        scenarios: str | None = None) -> None:
     import websockets
 
-    session = LiveSession(scenario, chaos, seed)
-    _write_live_page(port)
-    threading.Thread(target=_serve_static, args=(port,), daemon=True).start()
+    session = LiveSession(scenario, chaos, seed, scenarios)
+    threading.Thread(target=_serve_static, args=(port, _live_page(port)),
+                     daemon=True).start()
 
-    print(f"\n  SARATHI live  →  http://localhost:{port}/live.html")
+    print(f"\n  SARATHI live  →  http://localhost:{port}")
     print(f"  scenario: {scenario}   chaos: {session.chaos:.2f}\n")
 
     async def main():

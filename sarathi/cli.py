@@ -1,8 +1,10 @@
 """Command-line entry point.
 
-    python -m sarathi run scenarios/village_road_unmarked.yaml
-    python -m sarathi run scenarios/*.yaml --chaos 0.7 --seed 5
-    python -m sarathi run scenarios/market_dense_mixed.yaml --record out.json
+    uv run sarathi serve                       # live interactive demo
+    uv run sarathi list                        # available scenarios
+    uv run sarathi run village_road_unmarked   # one headless run
+    uv run sarathi run all --chaos 0.7         # every scenario, harder
+    uv run sarathi replay out.json -o page.html
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import glob
 import sys
 from pathlib import Path
 
+from .paths import scenario_dir
 from .planning.baseline import BaselineLaneFollower
 from .planning.sarathi import SarathiController
 from .sim.simulator import Simulator
@@ -29,11 +32,36 @@ def build_controller(name: str):
     return CONTROLLERS[name]()
 
 
+def resolve_scenarios(names: list[str], directory: str | None) -> list[Path]:
+    """Accept bare names, globs, explicit paths, or the word ``all``."""
+    root = scenario_dir(directory)
+    out: list[Path] = []
+    for name in names:
+        if name == "all":
+            out.extend(sorted(root.glob("*.yaml")))
+            continue
+        candidate = root / f"{name}.yaml"
+        if candidate.exists():
+            out.append(candidate)
+            continue
+        matched = sorted(Path(p) for p in glob.glob(name))
+        if matched:
+            out.extend(matched)
+            continue
+        raise SystemExit(
+            f"no scenario named {name!r} in {root}. "
+            f"Known: {', '.join(sorted(p.stem for p in root.glob('*.yaml')))}")
+    # De-duplicate while preserving order.
+    seen, unique = set(), []
+    for path in out:
+        if path not in seen:
+            seen.add(path)
+            unique.append(path)
+    return unique
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    paths: list[str] = []
-    for pattern in args.scenarios:
-        matched = sorted(glob.glob(pattern))
-        paths.extend(matched or [pattern])
+    paths = resolve_scenarios(args.scenarios, args.scenarios_dir)
     if not paths:
         raise SystemExit("no scenarios matched")
 
@@ -58,26 +86,41 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_serve(args: argparse.Namespace) -> int:
     from .serve import run
-    run(args.scenario, args.chaos, args.seed, args.port)
+    run(args.scenario, args.chaos, args.seed, args.port, args.scenarios_dir)
+    return 0
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    from .replay import build
+    out = build(Path(args.run), Path(args.out), args.chaos, args.outcome)
+    print(f"{out}  ({out.stat().st_size / 1e6:.2f} MB)")
     return 0
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    for path in sorted(glob.glob("scenarios/*.yaml")):
+    root = scenario_dir(args.scenarios_dir)
+    print(f"scenarios in {root}\n")
+    for path in sorted(root.glob("*.yaml")):
         sc = load_scenario(path)
         tags = ",".join(sc.tags)
-        print(f"{Path(path).name:<38s} chaos={sc.chaos:.2f} "
+        print(f"{path.stem:<32s} chaos={sc.chaos:.2f} "
               f"{sc.duration:5.0f}s  [{tags}]")
         print(f"    {sc.description.strip().splitlines()[0]}")
     return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="sarathi")
+    parser = argparse.ArgumentParser(
+        prog="sarathi",
+        description="SARATHI - adaptive path planning for unstructured Indian roads")
+    parser.add_argument("--scenarios-dir", default=None,
+                        help="directory of scenario YAML files "
+                             "(default: ./scenarios, else the bundled set)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     run = sub.add_parser("run", help="run one or more scenarios")
-    run.add_argument("scenarios", nargs="+")
+    run.add_argument("scenarios", nargs="+",
+                     help="scenario names, 'all', or paths")
     run.add_argument("--controller", default="sarathi")
     run.add_argument("--chaos", type=float, default=None,
                      help="override the scenario chaos level, 0..1")
@@ -98,6 +141,13 @@ def main(argv: list[str] | None = None) -> int:
 
     lst = sub.add_parser("list", help="list available scenarios")
     lst.set_defaults(func=cmd_list)
+
+    rep = sub.add_parser("replay", help="build a shareable replay page")
+    rep.add_argument("run")
+    rep.add_argument("-o", "--out", default="artifacts/mission-control.html")
+    rep.add_argument("--chaos", type=float, default=None)
+    rep.add_argument("--outcome", default=None)
+    rep.set_defaults(func=cmd_replay)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -8,6 +8,56 @@ unstructured Indian roads.
 
 ---
 
+## Run it
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) once:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# Windows (PowerShell)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Then, from a fresh clone — no virtualenv, no pip install, no Python setup:
+
+```bash
+uv run sarathi serve
+```
+
+Open **http://localhost:8420**. uv creates the environment and fetches
+dependencies on the first run; subsequent starts are instant.
+
+### The live demo
+
+Click the map to drop a road user in front of the vehicle. Shift-click removes
+one. The scenario dropdown switches roads without restarting.
+
+Nothing is scripted. The planner has no more foreknowledge of a hand-placed cow
+than of anything else in the scene, and the code answering the click is the code
+in the submission — which is the point. A recorded video invites the question
+"how do we know it isn't a replay?"; a judge who places the obstacle himself has
+already answered it.
+
+### Everything else
+
+```bash
+uv run sarathi list                          # the ten scenarios
+uv run sarathi run village_road_unmarked     # one headless run
+uv run sarathi run all --chaos 0.7           # every scenario, harder
+uv run sarathi run all --controller baseline # the lane-following comparison
+uv run sarathi run market_dense_mixed --record run.json
+uv run sarathi replay run.json -o page.html  # shareable replay page
+uv run --extra dev pytest                    # 85 tests
+```
+
+`--chaos 0..1` is a single knob over the whole scene: wrong-way riders, driver
+aggression, cattle, barricades and lane-marking visibility all scale with it.
+
+---
+
+## The idea
+
 Every production autonomous-driving stack assumes a **lane**. Indian roads do not
 have lanes — they have a *negotiated, continuously deforming free space* shared by
 buses, auto-rickshaws, two-wheelers filtering through 60 cm gaps, pushcarts,
@@ -20,48 +70,47 @@ SARATHI replaces the two primitives that break down here:
 | Lane centreline as the planning frame | **Drivable corridor**, derived from free space |
 | Binary occupancy grid | **Class-conditioned continuous risk field** |
 | One predicted trajectory per agent | **Multi-modal intent** with growing covariance |
-| Obstacles are walls | Potholes are **traversable cost**, not walls |
+| Obstacles are walls | Potholes are **traversable cost**; verges are drivable |
 
-Because it never needed lane markings, it degrades gracefully when they are faded,
-absent, or simply wrong.
+Because it never needed lane markings, it degrades gracefully when they are
+faded, absent, or simply wrong.
 
 ## Status
 
 | Batch | Scope | State |
 |---|---|---|
 | B0 | Architecture, PS decode, team plan | done |
-| B1 | Core sim, corridor, NLB-IDM traffic model | in progress |
-| B2 | Perception, prediction, risk field | — |
-| B3 | Hierarchical planner + safety supervisor | — |
-| B4 | Web Mission Control | — |
-| B5 | MATLAB / Simulink / Stateflow / RoadRunner | — |
-| B6 | Monte-Carlo campaign, ablations, report | — |
+| B1 | Core sim, corridor, NLB-IDM traffic model | done |
+| B2 | Perception, prediction, risk field | done |
+| B3 | Hierarchical planner + safety supervisor | works; still too conservative |
+| B4 | Mission Control, live interactive demo | done |
+| B5 | MATLAB / Simulink / Stateflow / RoadRunner | next |
+| B6 | Monte-Carlo campaign, ablations, report | next |
 
-## Quick start
-
-```bash
-python3 -m venv .venv && ./.venv/bin/pip install numpy scipy pyyaml pytest
-./.venv/bin/python -m pytest tests/ -q
-```
+Ten scenarios: the five the problem statement names, plus a single-track
+causeway, a school at closing time, an unlit highway at half sensor visibility,
+unmarked roadworks, and an informal bus stop.
 
 ## Layout
 
 ```
-sarathi/       Python engine (runs anywhere, no licence required)
+sarathi/       the stack (runs anywhere, no licence required)
   core/        types & Indian road-user taxonomy, geometry, Frenet, kinematics
   world/       drivable corridor, surface defects, scenario loader
   agents/      NLB-IDM + the Indian behaviour zoo
   perception/  sensor models, fusion, tracking
   prediction/  multi-modal intent prediction
-  planning/    risk field, Hybrid A*, behaviour FSM, Frenet lattice, MPC
-  safety/      RSS-India + control-barrier-function supervisor
-  metrics/     PS metrics + Monte-Carlo campaign runner
+  planning/    risk field, corridor path, Frenet lattice, behaviour FSM
+  safety/      RSS-India + control-barrier supervisor
+  metrics/     PS metrics + campaign runner
+  assets/      the Mission Control viewer
+  serve.py     live interactive server
 scenarios/     *.yaml — one spec, consumed by both the Python and MATLAB runtimes
 matlab/        MATLAB / Simulink / Stateflow / RoadRunner deliverable
-viz/           web Mission Control
-docs/          architecture, problem statement, novelty, team plan
+docs/          architecture, problem statement, team plan, MATLAB bridge
 ```
 
 Read **[docs/00-architecture.md](docs/00-architecture.md)** first — it is the plan
-of record. **[docs/03-team-plan.md](docs/03-team-plan.md)** has the six-person
-work split and the day-1 licence task.
+of record. **[docs/03-team-plan.md](docs/03-team-plan.md)** has the six-person work
+split; **[docs/04-matlab-bridge.md](docs/04-matlab-bridge.md)** covers the licence
+situation and the two-tier MATLAB design.
