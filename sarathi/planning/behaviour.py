@@ -163,7 +163,10 @@ class BehaviourPlanner:
             headway = scene.leader_gap / max(scene.ego_speed, 0.5)
             slow = scene.leader_speed < cfg.overtake_ratio * scene.speed_limit
             if headway < cfg.follow_headway:
-                if slow and scene.corridor_width > 5.5:
+                # 5.5 m ruled out overtaking on exactly the roads where Indian
+                # traffic overtakes constantly. A car plus a two-wheeler abreast
+                # needs about 4 m, and that is the real threshold.
+                if slow and scene.corridor_width > 4.2:
                     return Behaviour.OVERTAKE, "leader slow, space available"
                 return Behaviour.FOLLOW, f"headway {headway:.1f}s"
         return Behaviour.CRUISE, "clear"

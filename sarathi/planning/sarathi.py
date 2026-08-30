@@ -111,8 +111,9 @@ class SarathiController(EgoController):
                                                  cfg.desired_speed)
 
         # 1. Reference path from the drivable corridor, not from lane markings.
-        blockages = blockages_from_tracks(self.tracks, corridor) \
-            if cfg.use_derived_reference else []
+        blockages = blockages_from_tracks(
+            self.tracks, corridor, ego_speed=speed_limit,
+            cruise_speed=cfg.desired_speed) if cfg.use_derived_reference else []
         solution = derive_reference_path(
             corridor, s_ego, d_ego, blockages, self.params.width / 2.0,
             self.corridor_cfg)

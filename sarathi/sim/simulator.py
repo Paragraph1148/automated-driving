@@ -40,7 +40,7 @@ class Simulator:
 
     def __init__(self, scenario: Scenario, controller: EgoController,
                  record: bool = False, record_stride: int = 2,
-                 seed: int | None = None):
+                 seed: int | None = None, record_planner: bool = False):
         self.scenario = scenario
         self.controller = controller
         self.seed = scenario.seed if seed is None else seed
@@ -55,6 +55,7 @@ class Simulator:
 
         self.recorder = Recorder(self.corridor, scenario.name,
                                  stride=record_stride, enabled=record)
+        self.record_planner = record_planner and record
         self.metrics = MetricsAccumulator(scenario.name, self.seed,
                                           scenario.chaos, scenario.goal_s)
         self.t = 0.0
@@ -127,7 +128,11 @@ class Simulator:
         others = [a for aid, a in self.agents.items()
                   if aid != EGO_ID and a.active]
         self.metrics.tick(self.dt, self.ego, others, cmd.steer, latency_ms)
-        self.recorder.capture(self.t, self.agents, EGO_ID, cmd.debug)
+        layers = None
+        if self.record_planner:
+            from .snapshot import planner_snapshot
+            layers = planner_snapshot(self.controller, self.ego)
+        self.recorder.capture(self.t, self.agents, EGO_ID, cmd.debug, layers)
         self._check_termination(view, others)
 
     def _agent_command(self, agent: Agent, view: FrenetView) -> tuple[float, float]:

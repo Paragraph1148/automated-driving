@@ -185,25 +185,35 @@ def _to_world(ref: ReferencePath, s: np.ndarray, d: np.ndarray) -> np.ndarray:
 
 def blockages_from_tracks(tracks, corridor: Corridor,
                           speed_threshold: float = 0.6,
-                          s_min: float = -20.0) -> list[StaticBlockage]:
-    """Extract effectively stationary obstacles from the fused track list.
+                          s_min: float = -20.0,
+                          ego_speed: float = 0.0,
+                          cruise_speed: float = 12.0) -> list[StaticBlockage]:
+    """Extract obstructions that the reference path should route around.
 
-    Anything moving slower than ``speed_threshold`` is treated as furniture for the
-    purpose of shaping the reference path. That deliberately includes a cow that
-    has stopped and a bus waiting at a stand: the reference should route around
-    them, while the local planner still treats them as *dynamic* and able to move.
+    Anything *materially slower than we want to travel* counts, not merely anything
+    stationary. This is the difference between a planner that drives on an Indian
+    road and one that queues on it: a handcart at 1 m/s and a cycle at 3 m/s are
+    obstructions to be passed, and treating only stopped objects as blockages
+    leaves the vehicle stuck behind the slowest thing in front of it forever.
+
+    The local planner still treats every one of them as dynamic and able to move;
+    this only shapes where the reference line goes.
     """
+    threshold = max(speed_threshold, 0.45 * cruise_speed)
     from ..planning.risk import HARM_WEIGHT
 
     out: list[StaticBlockage] = []
     for tr in tracks:
-        if tr.speed > speed_threshold:
+        if tr.speed > threshold:
             continue
+        # Weight the obstruction by how much it would cost us: something almost
+        # keeping pace is barely worth deviating for.
+        slowness = float(np.clip(1.0 - tr.speed / max(threshold, 1e-3), 0.15, 1.0))
         s, d = corridor.reference.to_frenet(tr.position)
         if s < s_min:
             continue
         out.append(StaticBlockage(
             s=float(s), d=float(d),
             half_length=tr.length / 2.0, half_width=tr.width / 2.0,
-            weight=float(HARM_WEIGHT.get(tr.cls, 0.6)) / 0.6))
+            weight=slowness * float(HARM_WEIGHT.get(tr.cls, 0.6)) / 0.6))
     return out

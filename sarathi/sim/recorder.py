@@ -22,6 +22,9 @@ class Frame:
     agents: list[dict]
     ego: dict
     debug: dict = field(default_factory=dict)
+    #: Planner internals for Mission Control: risk grid, prediction cones,
+    #: candidate fan, chosen plan. Empty for headless campaign runs.
+    layers: dict = field(default_factory=dict)
 
 
 class Recorder:
@@ -55,7 +58,7 @@ class Recorder:
         }
 
     def capture(self, t: float, agents: dict[int, Agent], ego_id: int,
-                debug: dict | None = None) -> None:
+                debug: dict | None = None, layers: dict | None = None) -> None:
         if not self.enabled:
             return
         self._tick += 1
@@ -80,14 +83,16 @@ class Recorder:
                 ego_row = row
             else:
                 rows.append(row)
-        self.frames.append(Frame(round(t, 3), rows, ego_row, debug or {}))
+        frame = Frame(round(t, 3), rows, ego_row, debug or {})
+        frame.layers = layers or {}
+        self.frames.append(frame)
 
     def to_dict(self) -> dict:
         return {
             "scenario": self.scenario_name,
             "scene": self.scene,
             "frames": [{"t": f.t, "ego": f.ego, "agents": f.agents,
-                        "debug": f.debug} for f in self.frames],
+                        "debug": f.debug, **f.layers} for f in self.frames],
         }
 
     def save(self, path: str | Path) -> Path:

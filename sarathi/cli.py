@@ -41,7 +41,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     for path in paths:
         scenario = load_scenario(path, chaos=args.chaos, seed=args.seed)
         sim = Simulator(scenario, build_controller(args.controller),
-                        record=bool(args.record), record_stride=args.record_stride)
+                        record=bool(args.record), record_stride=args.record_stride,
+                        record_planner=bool(args.record) and not args.no_planner_layers)
         result = sim.run(verbose=True)
         if args.record:
             out = Path(args.record)
@@ -78,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--record", default=None,
                      help="write a run recording (file, or directory for many)")
     run.add_argument("--record-stride", type=int, default=2)
+    run.add_argument("--no-planner-layers", action="store_true",
+                     help="record only poses, omitting risk field and candidate fan")
     run.set_defaults(func=cmd_run)
 
     lst = sub.add_parser("list", help="list available scenarios")
