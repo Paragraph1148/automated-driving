@@ -64,6 +64,8 @@ class ReferenceSolution:
     #: signal because the nominal offset itself moves whenever the road changes
     #: width, so a highway taper reads as a permanent obstruction.
     clearance: float = float("inf")
+    #: Which way there is more room around the chosen line: +1 left, -1 right.
+    free_side: float = -1.0
     #: Deviation from the nominal offset, kept for reporting and diagnostics.
     deviation: float = 0.0
 
@@ -131,9 +133,32 @@ def derive_reference_path(corridor: Corridor, ego_s: float, ego_d: float,
     near = s_grid <= ego_s + near_horizon
     clearance = _path_clearance(corridor, s_grid[near], d_profile[near],
                                 blockages, ego_half_width)
+    free_side = _free_side(corridor, s_grid[near], d_profile[near],
+                           blockages, ego_half_width)
     nominal = np.asarray(corridor.nominal_offset(s_grid))
     deviation = float(np.max(np.abs(d_profile - nominal)))
-    return ReferenceSolution(path, s_grid, d_profile, clearance, deviation)
+    return ReferenceSolution(path, s_grid, d_profile, clearance, free_side,
+                             deviation)
+
+
+def _free_side(corridor: Corridor, s_grid: np.ndarray, d_profile: np.ndarray,
+               blockages: list[StaticBlockage], ego_half_width: float) -> float:
+    """Which side of the chosen line has more usable room, as +1 or -1."""
+    if len(s_grid) == 0:
+        return -1.0
+    d_min, d_max = corridor.bounds_at(s_grid)
+    left = np.asarray(d_max) - ego_half_width - d_profile
+    right = d_profile - (np.asarray(d_min) + ego_half_width)
+    for blk in blockages:
+        overlaps = np.abs(s_grid - blk.s) < blk.half_length + 2.0
+        if not np.any(overlaps):
+            continue
+        # A blockage only eats into the side it actually sits on.
+        gap = np.abs(d_profile - blk.d) - blk.half_width - ego_half_width
+        on_left = blk.d > d_profile
+        left = np.where(overlaps & on_left, np.minimum(left, gap), left)
+        right = np.where(overlaps & ~on_left, np.minimum(right, gap), right)
+    return 1.0 if float(np.min(left)) > float(np.min(right)) else -1.0
 
 
 def _path_clearance(corridor: Corridor, s_grid: np.ndarray, d_profile: np.ndarray,

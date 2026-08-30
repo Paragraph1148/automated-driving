@@ -261,95 +261,78 @@ class FrenetLatticePlanner:
     # -- stage 1: sample the lattice, batched -----------------------------
     def _sample(self, state, target_speed, d_bias, times,
                 lateral_limits=None) -> dict:
+        """Build the fan so that every candidate is kinematically consistent.
+
+        Laterals and longitudinals used to be sampled independently and then
+        paired by duration, with the lateral span sized from an *optimistic*
+        estimate of how far the vehicle would travel. Pairing then produced
+        combinations that were impossible by construction - a 2.4 m sideways
+        offset joined to a decelerate-to-standstill profile that covers 0.3 m -
+        and the feasibility check dutifully rejected almost the whole fan. At low
+        speed that left three usable candidates out of a hundred and thirty, which
+        is why the vehicle could not pull out from behind a stopped bus.
+
+        Sizing each lateral against the travel of the longitudinal it is actually
+        paired with costs a few more polynomial solves and makes the whole fan
+        usable.
+        """
         cfg = self.cfg
         s0, s_dot0, s_ddot0, d0, d_dot0, d_ddot0 = state
-        speeds = np.array(sorted({
+        speeds = sorted({
             round(max(0.0, target_speed * f), 3) for f in cfg.speed_fractions
-        } | {
-            round(v, 3) for v in cfg.speed_absolutes
-        }))
+        } | {round(v, 3) for v in cfg.speed_absolutes})
 
-        # Lateral and longitudinal polynomials are independent given the duration,
-        # so evaluate each family once and combine by index rather than solving
-        # one polynomial per candidate.
-        lat_coeffs, lat_key = [], []
-        lon_coeffs, lon_key = [], []
-        for di, duration in enumerate(cfg.durations):
-            # How far the vehicle can travel during this manoeuvre, and hence how
-            # far it can move sideways. Bounding the *displacement from where the
-            # ego already is* - rather than the absolute offset - is the part that
-            # matters: a lateral bias of -0.7 m otherwise pushes every target
-            # beyond reach, and the whole fan is rejected on curvature.
-            travel = (s_dot0 * duration
-                      + 0.35 * cfg.a_long_max * duration ** 2)
-            max_shift = float(np.clip(cfg.max_lateral_rate * travel,
-                                      cfg.min_lateral_span, cfg.lateral_span))
-            desired = np.linspace(-cfg.lateral_span, cfg.lateral_span,
-                                  cfg.lateral_samples) + d_bias
-            offsets = d0 + np.clip(desired - d0, -max_shift, max_shift)
-            if lateral_limits is not None:
-                # Generate inside the carriageway rather than generating outside
-                # it and discarding afterwards. On a 4.4 m village road the
-                # discard-after approach throws away most of the fan and leaves
-                # the planner with nothing to choose between.
-                lo, hi = lateral_limits
-                offsets = np.clip(offsets, min(lo, hi), max(lo, hi))
-            offsets = np.unique(np.round(offsets, 3))
-            for target_d in offsets:
-                lat_coeffs.append(quintic(d0, d_dot0, d_ddot0, float(target_d),
-                                          0.0, 0.0, duration))
-                lat_key.append((di, float(target_d)))
+        lat_coeffs, lon_coeffs = [], []
+        target_d, target_v, duration_of = [], [], []
+        for duration in cfg.durations:
             for v in speeds:
-                lon_coeffs.append(quartic(s0, s_dot0, s_ddot0, float(v), 0.0,
-                                          duration))
-                lon_key.append((di, float(v)))
+                lon = quartic(s0, s_dot0, s_ddot0, float(v), 0.0, duration)
+                # Exact distance this profile covers, not an estimate of it.
+                travel = max(float(_poly_eval(lon, np.array([[duration]]))[0, 0]
+                                   - s0), 0.3)
+                max_shift = float(np.clip(cfg.max_lateral_rate * travel,
+                                          cfg.min_lateral_span,
+                                          cfg.lateral_span))
+                desired = np.linspace(-cfg.lateral_span, cfg.lateral_span,
+                                      cfg.lateral_samples) + d_bias
+                offsets = d0 + np.clip(desired - d0, -max_shift, max_shift)
+                if lateral_limits is not None:
+                    lo, hi = lateral_limits
+                    offsets = np.clip(offsets, min(lo, hi), max(lo, hi))
+                for target in np.unique(np.round(offsets, 3)):
+                    lat_coeffs.append(quintic(d0, d_dot0, d_ddot0, float(target),
+                                              0.0, 0.0, duration))
+                    lon_coeffs.append(lon)
+                    target_d.append(float(target))
+                    target_v.append(float(v))
+                    duration_of.append(float(duration))
 
         lat_coeffs = np.array(lat_coeffs)
         lon_coeffs = np.array(lon_coeffs)
-        durations = np.array(cfg.durations)
+        durations = np.array(duration_of)
 
-        lat_dur = np.array([durations[k[0]] for k in lat_key])
-        lon_dur = np.array([durations[k[0]] for k in lon_key])
-        t_lat = np.minimum(times[None, :], lat_dur[:, None])
-        t_lon = np.minimum(times[None, :], lon_dur[:, None])
-
-        d_all = _poly_eval(lat_coeffs, t_lat)
-        d_dot_all = _poly_eval(lat_coeffs, t_lat, 1)
-        d_ddot_all = _poly_eval(lat_coeffs, t_lat, 2)
-        past = times[None, :] > lat_dur[:, None]
+        t_clamped = np.minimum(times[None, :], durations[:, None])
+        d_all = _poly_eval(lat_coeffs, t_clamped)
+        d_dot_all = _poly_eval(lat_coeffs, t_clamped, 1)
+        d_ddot_all = _poly_eval(lat_coeffs, t_clamped, 2)
+        past = times[None, :] > durations[:, None]
         d_dot_all = np.where(past, 0.0, d_dot_all)
         d_ddot_all = np.where(past, 0.0, d_ddot_all)
 
-        s_all = _poly_eval(lon_coeffs, t_lon)
-        s_dot_all = _poly_eval(lon_coeffs, t_lon, 1)
-        s_ddot_all = _poly_eval(lon_coeffs, t_lon, 2)
-        overrun = np.maximum(0.0, times[None, :] - lon_dur[:, None])
+        s_all = _poly_eval(lon_coeffs, t_clamped)
+        s_dot_all = _poly_eval(lon_coeffs, t_clamped, 1)
+        s_ddot_all = _poly_eval(lon_coeffs, t_clamped, 2)
+        overrun = np.maximum(0.0, times[None, :] - durations[:, None])
         s_all = s_all + s_dot_all * overrun
-        s_ddot_all = np.where(times[None, :] > lon_dur[:, None], 0.0, s_ddot_all)
-
-        # Pair every lateral with every longitudinal *of the same duration*.
-        lat_idx, lon_idx = [], []
-        for di in range(len(durations)):
-            lats = [i for i, k in enumerate(lat_key) if k[0] == di]
-            lons = [i for i, k in enumerate(lon_key) if k[0] == di]
-            for li in lats:
-                for oi in lons:
-                    lat_idx.append(li)
-                    lon_idx.append(oi)
-        lat_idx = np.array(lat_idx)
-        lon_idx = np.array(lon_idx)
+        s_ddot_all = np.where(past, 0.0, s_ddot_all)
 
         return {
-            "lat_idx": lat_idx, "lon_idx": lon_idx,
-            "d": d_all[lat_idx], "d_dot": d_dot_all[lat_idx],
-            "d_ddot": d_ddot_all[lat_idx],
-            "s": s_all[lon_idx], "s_dot": s_dot_all[lon_idx],
-            "s_ddot": s_ddot_all[lon_idx],
-            "target_d": np.array([lat_key[i][1] for i in lat_idx]),
-            "target_v": np.array([lon_key[i][1] for i in lon_idx]),
-            "duration": np.array([durations[lat_key[i][0]] for i in lat_idx]),
-            "feasible": np.ones(len(lat_idx), dtype=bool),
-            "reason": [""] * len(lat_idx),
+            "d": d_all, "d_dot": d_dot_all, "d_ddot": d_ddot_all,
+            "s": s_all, "s_dot": s_dot_all, "s_ddot": s_ddot_all,
+            "target_d": np.array(target_d), "target_v": np.array(target_v),
+            "duration": durations,
+            "feasible": np.ones(len(lat_coeffs), dtype=bool),
+            "reason": [""] * len(lat_coeffs),
         }
 
     # -- stage 2: lift to world, batched ----------------------------------

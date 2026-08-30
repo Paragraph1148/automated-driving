@@ -47,6 +47,9 @@ class SceneSummary:
     crossing_gap: float = float("inf")
     #: Free lateral space either side of the derived path, at its tightest.
     path_clearance: float = float("inf")
+    #: Which way there is more room: +1 left of the reference, -1 right. Used to
+    #: aim a nudge, rather than merely slowing down inside a tight gap.
+    free_side: float = -1.0
     #: Deviation from the nominal offset. Diagnostic only - not a guard input.
     reference_deviation: float = 0.0
     corridor_width: float = 8.0
@@ -86,8 +89,16 @@ class BehaviourConfig:
     nudge_clearance: float = 0.7
     #: Headway used to decide we are following rather than cruising.
     follow_headway: float = 2.4
+    #: Distance below which a leader concerns us whatever our speed. A time gap
+    #: computed with a speed floor goes to infinity as the vehicle stops, so a
+    #: stationary car decides it is following nothing - and never considers
+    #: overtaking the stopped bus three metres in front of it.
+    follow_min_gap: float = 12.0
     #: Speed ratio below which a leader is worth overtaking.
     overtake_ratio: float = 0.72
+    #: Carriageway width needed before overtaking is considered at all. A car
+    #: plus a two-wheeler abreast needs roughly 4 m.
+    overtake_min_width: float = 4.2
     #: Minimum time in a state before another may be entered, seconds.
     dwell: float = 0.6
 
@@ -160,18 +171,26 @@ class BehaviourPlanner:
             return Behaviour.YIELD, "closing on a vulnerable road user"
         if scene.density > cfg.creep_density or scene.corridor_width < 4.2:
             return Behaviour.CREEP, "dense or constricted"
-        if scene.path_clearance < cfg.nudge_clearance:
-            return Behaviour.NUDGE, "squeezing past an obstruction"
+
+        # Overtaking is checked *before* nudging. Passing a stopped bus is both
+        # "there is a slow leader" and "the gap beside it is tight", and the two
+        # guards fire together - but nudging only slows down while overtaking
+        # also commits laterally. Ordering nudge first meant the vehicle crept
+        # into the gap behind a bus at walking pace and then had neither the room
+        # nor the speed to pull out of it, which is the deadlock this ordering
+        # existed to cause.
         if np.isfinite(scene.leader_gap):
             headway = scene.leader_gap / max(scene.ego_speed, 0.5)
             slow = scene.leader_speed < cfg.overtake_ratio * scene.speed_limit
-            if headway < cfg.follow_headway:
-                # 5.5 m ruled out overtaking on exactly the roads where Indian
-                # traffic overtakes constantly. A car plus a two-wheeler abreast
-                # needs about 4 m, and that is the real threshold.
-                if slow and scene.corridor_width > 4.2:
+            if headway < cfg.follow_headway or scene.leader_gap < cfg.follow_min_gap:
+                if slow and scene.corridor_width > cfg.overtake_min_width:
                     return Behaviour.OVERTAKE, "leader slow, space available"
+                if scene.path_clearance < cfg.nudge_clearance:
+                    return Behaviour.NUDGE, "squeezing past an obstruction"
                 return Behaviour.FOLLOW, f"headway {headway:.1f}s"
+
+        if scene.path_clearance < cfg.nudge_clearance:
+            return Behaviour.NUDGE, "squeezing past an obstruction"
         return Behaviour.CRUISE, "clear"
 
     def _targets(self, state: Behaviour,
@@ -190,9 +209,13 @@ class BehaviourPlanner:
         if state is Behaviour.CREEP:
             return min(cfg.creep_speed, limit), 0.0
         if state is Behaviour.NUDGE:
-            return min(cfg.nudge_speed, limit), 0.0
+            # Aim the nudge at whichever side has room. Slowing down without
+            # committing laterally is how a vehicle ends up wedged.
+            return min(cfg.nudge_speed, limit), 0.55 * scene.free_side
         if state is Behaviour.OVERTAKE:
-            return limit, -0.7          # India is left-hand traffic: pass on the right
+            # India is left-hand traffic, so passing is to the right - unless the
+            # room is demonstrably on the other side.
+            return limit, 0.8 * scene.free_side
         if state is Behaviour.FOLLOW:
             return float(np.clip(scene.leader_speed, 0.0, limit)), 0.0
         return limit, 0.0
@@ -210,6 +233,7 @@ def summarise_scene(ego_state, ego_frenet, tracks, predictions: list[Prediction]
     s_ego, d_ego, s_dot_ego, _ = ego_frenet
     summary = SceneSummary(ego_speed=max(s_dot_ego, 0.0), speed_limit=speed_limit,
                            path_clearance=reference.clearance,
+                           free_side=reference.free_side,
                            reference_deviation=reference.deviation,
                            corridor_width=float(corridor.width_at(s_ego)))
 

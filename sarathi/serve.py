@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .core.types import AgentClass
 from .paths import scenario_dir, viewer_template
+from .tuning import apply as apply_tuning, read_all as read_tuning, schema
 from .planning.sarathi import SarathiController
 from .sim.simulator import Simulator
 from .sim.snapshot import planner_snapshot
@@ -38,6 +39,9 @@ class LiveSession:
                  seed: int | None = None, scenarios: str | None = None):
         self.scenario_dir = scenario_dir(scenarios)
         self.lock = threading.Lock()
+        #: Parameters the operator has changed, kept across scenario switches so
+        #: a judge does not lose their tuning every time they change road.
+        self.overrides: dict[str, float | bool] = {}
         self.paused = False
         self.rate = 1.0
         self.load(scenario, chaos, seed)
@@ -53,9 +57,35 @@ class LiveSession:
             self.scenario_name = scenario
             self.chaos = sc.chaos
             self.seed = sc.seed
-            self.sim = Simulator(sc, SarathiController(), record=False)
+            self.sim = Simulator(sc, SarathiController(), record=False, live=True)
             self.scene = _scene_payload(self.sim.corridor)
             self.outcome = ""
+        self._reapply_overrides()
+
+    def _reapply_overrides(self) -> None:
+        for key, value in list(self.overrides.items()):
+            try:
+                apply_tuning(self.sim.controller, key, value)
+            except KeyError:
+                self.overrides.pop(key, None)
+
+    def tune(self, key: str, value) -> float | bool:
+        with self.lock:
+            coerced = apply_tuning(self.sim.controller, key, value)
+        self.overrides[key] = coerced
+        return coerced
+
+    def reset_tuning(self) -> dict:
+        self.overrides.clear()
+        with self.lock:
+            fresh = SarathiController()
+            self.sim.controller.behaviour.cfg = fresh.behaviour.cfg
+            self.sim.controller.lattice.cfg = fresh.lattice.cfg
+            self.sim.controller.risk_cfg = fresh.risk_cfg
+            self.sim.controller.safety.p = fresh.safety.p
+            self.sim.controller.corridor_cfg = fresh.corridor_cfg
+            self.sim.controller.cfg = fresh.cfg
+            return read_tuning(self.sim.controller)
 
     def step(self) -> None:
         with self.lock:
@@ -104,7 +134,7 @@ class LiveSession:
                        "debug": dict(sim.controller._debug_cache)
                        if hasattr(sim.controller, "_debug_cache") else {}}
             payload.update(planner_snapshot(sim.controller, ego))
-            payload["outcome"] = self.outcome
+            payload["events"] = list(sim.events)
             payload["paused"] = self.paused
             return payload
 
@@ -113,7 +143,9 @@ class LiveSession:
             return {"mode": "live", "scenario": self.scenario_name,
                     "chaos": self.chaos, "scene": self.scene,
                     "scenarios": sorted(p.stem for p in
-                                        self.scenario_dir.glob("*.yaml"))}
+                                        self.scenario_dir.glob("*.yaml")),
+                    "tunables": schema(),
+                    "values": read_tuning(self.sim.controller)}
 
 
 def _scene_payload(corridor) -> dict:
@@ -164,6 +196,16 @@ async def _handle(session: LiveSession, websocket) -> None:
                 session.rate = float(msg.get("value", 1.0))
             elif cmd == "restart_ego":
                 session.restart_ego()
+            elif cmd == "set":
+                try:
+                    value = session.tune(msg["key"], msg["value"])
+                except KeyError:
+                    continue
+                await websocket.send(json.dumps(
+                    {"tuned": {"key": msg["key"], "value": value}}))
+            elif cmd == "reset_tuning":
+                await websocket.send(json.dumps(
+                    {"values": session.reset_tuning()}))
             elif cmd == "load":
                 session.load(msg["scenario"], msg.get("chaos"), msg.get("seed"))
                 await websocket.send(json.dumps({"meta": session.meta()}))

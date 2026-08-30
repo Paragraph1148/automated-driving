@@ -41,7 +41,8 @@ class Simulator:
 
     def __init__(self, scenario: Scenario, controller: EgoController,
                  record: bool = False, record_stride: int = 2,
-                 seed: int | None = None, record_planner: bool = False):
+                 seed: int | None = None, record_planner: bool = False,
+                 live: bool = False):
         self.scenario = scenario
         self.controller = controller
         self.seed = scenario.seed if seed is None else seed
@@ -60,6 +61,11 @@ class Simulator:
         self.metrics = MetricsAccumulator(scenario.name, self.seed,
                                           scenario.chaos, scenario.goal_s)
         self.t = 0.0
+        #: In a live session the run never ends: contact and off-road are recorded
+        #: as events and the world keeps running. A demo that freezes the moment
+        #: something goes wrong is a demo nobody can explore.
+        self.live = live
+        self.events: list[dict] = []
         self.finished = False
         self.outcome = ""
         self._collision_with: str | None = None
@@ -171,6 +177,7 @@ class Simulator:
                                      accel, lateral, self.dt)
 
         self.t += self.dt
+        self._keep_traffic_on_road()
         self._despawn()
 
         others = [a for aid, a in self.agents.items()
@@ -203,6 +210,34 @@ class Simulator:
             self.ego.state, cmd.accel, cmd.steer, self.dt,
             wheelbase_for(p), v_max=p.v_desired * 1.6, v_min=0.0)
 
+    def _keep_traffic_on_road(self) -> None:
+        """Hold other road users inside the drivable band.
+
+        Their lateral controller is a soft repulsion from the verge, which a hard
+        enough push - a lane change into them, a cow stopping dead - can overcome.
+        Real traffic does not drive into the ditch, and a two-wheeler wandering
+        across a field is the single most damaging thing a viewer can see, because
+        it makes every other behaviour look arbitrary too.
+        """
+        ref = self.corridor.reference
+        for aid, agent in self.agents.items():
+            if aid == EGO_ID or not agent.active or agent.is_static:
+                continue
+            s, d = ref.to_frenet(agent.state.position)
+            lo, hi = self.corridor.hard_bounds_at(s)
+            half_w = agent.params.width / 2.0
+            lo, hi = float(lo) + half_w, float(hi) - half_w
+            if lo > hi:                       # road narrower than the vehicle
+                lo = hi = 0.5 * (lo + hi)
+            if lo <= d <= hi:
+                continue
+            clamped = min(max(d, lo), hi)
+            pos = ref.to_cartesian(s, clamped)
+            agent.state.x, agent.state.y = float(pos[0]), float(pos[1])
+            # Bleed off the lateral velocity that carried it out, so it settles
+            # against the edge instead of grinding along it.
+            agent.state.lateral_speed = 0.0
+
     def _despawn(self) -> None:
         length = self.corridor.reference.length
         ref = self.corridor.reference
@@ -228,10 +263,16 @@ class Simulator:
                     ego_r + other.footprint.radius():
                 continue
             if convex_polygons_intersect(ego_poly, other.corners()):
+                impact = float(np.linalg.norm(
+                    other.state.velocity - self.ego.state.velocity))
+                if self.live:
+                    self._record_event("contact", f"{other.cls.value} "
+                                       f"at {impact:.1f} m/s")
+                    other.active = False       # clear it so we are not stuck in it
+                    continue
                 self.outcome = "collision"
                 self._collision_with = other.cls.value
-                self._impact_speed = float(np.linalg.norm(
-                    other.state.velocity - self.ego.state.velocity))
+                self._impact_speed = impact
                 self.finished = True
                 return
 
@@ -239,13 +280,34 @@ class Simulator:
         half_w = self.ego.params.width / 2.0
         if d > float(d_max) - half_w + OFF_ROAD_TOLERANCE or \
                 d < float(d_min) + half_w - OFF_ROAD_TOLERANCE:
-            self.outcome = "off_road"
-            self.finished = True
+            if self.live:
+                self._record_event("off road", f"{abs(d):.1f} m from centre")
+                self._recentre_ego(s)
+            else:
+                self.outcome = "off_road"
+                self.finished = True
             return
 
         if s >= self.scenario.goal_s:
-            self.outcome = "goal"
-            self.finished = True
+            if self.live:
+                self._record_event("goal reached", f"{s:.0f} m")
+                self._add_ego()
+                self.controller.reset(self.scenario)
+            else:
+                self.outcome = "goal"
+                self.finished = True
+
+    def _record_event(self, kind: str, detail: str) -> None:
+        self.events.append({"t": round(self.t, 1), "kind": kind, "detail": detail})
+        del self.events[:-12]
+
+    def _recentre_ego(self, s: float) -> None:
+        """Put the ego back on the carriageway without restarting the scene."""
+        ref = self.corridor.reference
+        pos = ref.to_cartesian(s, float(self.corridor.nominal_offset(s)))
+        self.ego.state.x, self.ego.state.y = float(pos[0]), float(pos[1])
+        self.ego.state.heading = float(ref.heading_at(s))
+        self.ego.state.speed = 0.0
 
     def _ego_frenet_fallback(self) -> tuple[float, float]:
         return self.corridor.reference.to_frenet(self.ego.state.position)

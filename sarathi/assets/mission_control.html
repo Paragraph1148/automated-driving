@@ -97,6 +97,26 @@ h2{font-family:"IBM Plex Sans Condensed",sans-serif; font-size:11px; letter-spac
 .palette button{text-align:left; padding:7px 9px; display:flex; align-items:center; gap:7px;
                 letter-spacing:.04em; font-size:11px}
 .palette button .swatch{width:9px;height:9px;border-radius:2px}
+details.tune{border:1px solid var(--line); border-radius:2px; margin-bottom:6px;
+             background:var(--surface-1)}
+details.tune > summary{cursor:pointer; padding:7px 10px; list-style:none;
+  font-family:"IBM Plex Sans Condensed",sans-serif; font-size:11px; font-weight:600;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--ink-2);
+  display:flex; justify-content:space-between; align-items:center}
+details.tune > summary::-webkit-details-marker{display:none}
+details.tune > summary::after{content:"+"; color:var(--ink-3); font-size:13px}
+details.tune[open] > summary::after{content:"–"}
+details.tune[open] > summary{color:var(--accent); border-bottom:1px solid var(--line)}
+.tune-body{padding:8px 10px 10px; display:flex; flex-direction:column; gap:9px}
+.knob{display:flex; flex-direction:column; gap:3px}
+.knob .row{display:flex; justify-content:space-between; align-items:baseline; gap:8px}
+.knob label{font-size:12px; color:var(--ink-1)}
+.knob .val{font-family:"IBM Plex Mono",monospace; font-size:11.5px;
+           font-variant-numeric:tabular-nums; color:var(--accent)}
+.knob input[type=range]{width:100%; accent-color:var(--accent); margin:0}
+.knob .hint{font-size:10.5px; color:var(--ink-3); line-height:1.35}
+.knob.toggle .row{cursor:pointer}
+.knob.toggle input{accent-color:var(--accent); width:15px; height:15px}
 .legend{display:flex; flex-direction:column; gap:6px; font-size:12.5px}
 .legend div{display:flex; align-items:center; gap:9px; color:var(--ink-2)}
 .legend .shape{width:22px; height:11px; border-radius:1.5px; flex:none}
@@ -144,6 +164,7 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
       <div class="chip">feasible <b id="m-feas">0</b></div>
       <div class="chip">margin relief <b id="m-relief">0.00</b> m</div>
       <div class="chip">safety cap <b id="m-cap">—</b></div>
+      <div class="chip" id="chip-events" hidden>last event <b id="m-event">—</b></div>
     </div>
   </div>
 
@@ -176,6 +197,14 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
         <button id="restart-ego">Reset vehicle</button>
         <button id="pause-live" aria-pressed="false">Pause</button>
       </div>
+    </div>
+
+    <div id="tune-panel" hidden>
+      <h2>Thresholds <button id="tune-reset" style="float:right;padding:3px 8px;font-size:10px">Reset</button></h2>
+      <p style="margin:0 0 9px;color:var(--ink-2);font-size:12.5px">
+        Every threshold that shapes the behaviour, changeable while it drives.
+        The ablations switch parts of the architecture off.</p>
+      <div id="tune-sections"></div>
     </div>
 
     <div>
@@ -519,7 +548,66 @@ function screenToWorld(px, py){
   return [ox + ux*c + uy*s, oy - ux*s + uy*c];
 }
 
+function buildTuning(tunables, values){
+  const host = document.getElementById("tune-sections");
+  host.innerHTML = "";
+  const sections = [];
+  for (const t of tunables){
+    if (!sections.includes(t.section)) sections.push(t.section);
+  }
+  for (const section of sections){
+    const d = document.createElement("details");
+    d.className = "tune";
+    if (section === "Driving") d.open = true;
+    d.innerHTML = `<summary>${section}</summary>`;
+    const body = document.createElement("div");
+    body.className = "tune-body";
+    for (const t of tunables.filter(x => x.section === section)){
+      const wrap = document.createElement("div");
+      wrap.className = "knob" + (t.kind === "bool" ? " toggle" : "");
+      const v = values[t.key];
+      if (t.kind === "bool"){
+        wrap.innerHTML =
+          `<label class="row"><span>${t.label}</span>
+             <input type="checkbox" ${v ? "checked" : ""}></label>
+           <span class="hint">${t.help}</span>`;
+        wrap.querySelector("input").addEventListener("change", e =>
+          send({cmd:"set", key:t.key, value:e.target.checked}));
+      } else {
+        wrap.innerHTML =
+          `<div class="row"><label>${t.label}</label>
+             <span class="val" data-for="${t.key}">${Number(v).toFixed(2)}</span></div>
+           <input type="range" min="${t.lo}" max="${t.hi}" step="${t.step}" value="${v}">
+           <span class="hint">${t.help}</span>`;
+        const range = wrap.querySelector("input");
+        const read = wrap.querySelector(".val");
+        range.addEventListener("input", e => {
+          read.textContent = Number(e.target.value).toFixed(2);
+          send({cmd:"set", key:t.key, value:Number(e.target.value)});
+        });
+      }
+      body.appendChild(wrap);
+    }
+    d.appendChild(body);
+    host.appendChild(d);
+  }
+}
+
+function syncTuning(values){
+  for (const [key, v] of Object.entries(values)){
+    const read = document.querySelector(`.val[data-for="${CSS.escape(key)}"]`);
+    if (read){
+      read.textContent = Number(v).toFixed(2);
+      const range = read.closest(".knob").querySelector("input[type=range]");
+      if (range) range.value = v;
+    }
+  }
+}
+
+function send(msg){ if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+
 function startLive(){
+  document.getElementById("tune-panel").hidden = false;
   document.getElementById("place-panel").hidden = false;
   document.getElementById("live-controls").hidden = false;
   document.getElementById("play").hidden = true;
@@ -561,15 +649,23 @@ function startLive(){
           o.value = s; o.textContent = s.replace(/_/g," "); pick.appendChild(o);
         }
         pick.addEventListener("change", () =>
-          ws.send(JSON.stringify({cmd:"load", scenario: pick.value})));
+          send({cmd:"load", scenario: pick.value}));
       }
       pick.value = msg.meta.scenario;
+      buildTuning(msg.meta.tunables, msg.meta.values);
       return;
+    }
+    if (msg.values){ syncTuning(msg.values); return; }
+    if (msg.tuned){ return; }
+    if (msg.events && msg.events.length){
+      const last = msg.events[msg.events.length-1];
+      document.getElementById("chip-events").hidden = false;
+      document.getElementById("m-event").textContent =
+        `${last.kind} · ${last.detail} @ ${last.t}s`;
     }
     lastFrame = msg; frames = [msg]; idx = 0;
     document.getElementById("live-clock").textContent = `${msg.t.toFixed(1)} s`;
-    document.getElementById("m-outcome").textContent =
-      msg.outcome ? msg.outcome : "running";
+    document.getElementById("m-outcome").textContent = "running";
     draw();
   });
 
@@ -587,22 +683,25 @@ function startLive(){
   });
   cv.style.cursor = "crosshair";
 
+  document.getElementById("tune-reset").addEventListener("click", () =>
+    send({cmd:"reset_tuning"}));
+
   const pauseBtn = document.getElementById("pause-live");
   let paused = false;
   pauseBtn.addEventListener("click", () => {
     paused = !paused;
     pauseBtn.textContent = paused ? "Resume" : "Pause";
     pauseBtn.setAttribute("aria-pressed", String(paused));
-    ws.send(JSON.stringify({cmd:"pause", value:paused}));
+    send({cmd:"pause", value:paused});
   });
   document.getElementById("restart-ego").addEventListener("click", () =>
-    ws.send(JSON.stringify({cmd:"restart_ego"})));
+    send({cmd:"restart_ego"}));
   const rateLive = document.getElementById("rate-live");
   let lr = 1;
   rateLive.addEventListener("click", () => {
     lr = lr === 1 ? 2 : lr === 2 ? 0.5 : 1;
     rateLive.textContent = lr + "×";
-    ws.send(JSON.stringify({cmd:"rate", value:lr}));
+    send({cmd:"rate", value:lr});
   });
 }
 

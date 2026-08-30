@@ -49,6 +49,17 @@ class RSSParams:
     #: Control-barrier gain: how sharply the speed cap tightens as the margin
     #: closes. Higher is safer and jerkier.
     alpha: float = 1.5
+    #: Never close within this bumper-to-bumper distance of a stopped vehicle
+    #: in our own track, metres.
+    #:
+    #: RSS alone permits creeping to within centimetres, since at 0.09 m/s the
+    #: stopping distance really is centimetres. That is safe and useless: a
+    #: vehicle wedged 0.6 m behind a stopped bus cannot build the forward travel
+    #: a lateral manoeuvre needs, so it can never pull out and waits for the bus
+    #: instead. Human drivers leave room precisely so they can pull out; so do we.
+    min_standoff: float = 2.0
+    #: A leader below this speed counts as stopped for the standoff rule.
+    standoff_leader_speed: float = 1.0
 
 
 #: Braking we may assume a leading agent is capable of. Assuming a leader can
@@ -182,6 +193,9 @@ class SafetySupervisor:
                 limit = max_safe_speed_same_direction(gap, max(v_along, 0.0), p,
                                                       b_other)
                 why = "leader"
+                if v_along < p.standoff_leader_speed and gap < p.min_standoff:
+                    limit = 0.0
+                    why = "standoff"
             if limit < cap:
                 cap, binding, reason = limit, tr.id, f"{why}:{tr.cls.value}"
 
