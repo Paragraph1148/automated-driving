@@ -1,0 +1,56 @@
+name: school_zone_pedestrians
+description: >
+  Closing time outside a school. Children cross in bursts wherever they happen to
+  be standing, with almost no gap acceptance, while parents' two-wheelers are
+  parked halfway into the carriageway and autos stop without warning to load. The
+  test is restraint: the planner must stay slow and yield generously without
+  freezing altogether, because a vehicle that never moves is also a failure.
+tags: [required-extra, urban, vru, school, restraint]
+seed: 113
+duration: 100.0
+dt: 0.05
+chaos: 0.5
+
+corridor:
+  geometry:
+    segments: [{type: straight, length: 130}]
+  width:
+    - [0,   4.5, 4.5]
+    - [40,  3.8, 3.8]
+    - [95,  3.8, 3.8]
+    - [130, 4.5, 4.5]
+  road_type: two_way
+  lane_marking_quality: 0.15
+  surface_quality: 0.6
+  defects:
+    - {s: 62, d: -1.0, radius: 1.1, severity: 0.5}
+    - {s: 78, d: 0.0,  radius: 1.8, severity: 0.4, kind: speed_breaker}
+
+ego: {s: 4.0, d: 1.8, speed: 8.0, goal_s: 122.0}
+
+agents:
+  - {cls: two_wheeler, policy: static, s: 44, d: 3.3}
+  - {cls: two_wheeler, policy: static, s: 49, d: 3.3}
+  - {cls: two_wheeler, policy: static, s: 54, d: 3.4}
+  - {cls: auto_rickshaw, policy: sudden_stop, s: 35, d: 2.0, speed: 6.0,
+     args: {stop_at_s: 66.0, hold: 14.0}}
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 41, d: 2.6,
+     args: {cross_to: -3.0, recklessness: 0.9, start_delay: 3.0}}
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 58, d: 2.9,
+     args: {cross_to: -3.0, recklessness: 0.95, start_delay: 5.5}}
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 61, d: -2.8,
+     args: {cross_to: 3.0, recklessness: 0.85, start_delay: 9.0}}
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 72, d: 2.8,
+     args: {cross_to: -2.8, recklessness: 0.9, start_delay: 16.0}}
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 88, d: -2.6,
+     args: {cross_to: 2.8, recklessness: 0.8, start_delay: 24.0}}
+  - {cls: stray_dog, policy: cattle, s: 70, d: 1.0}
+
+traffic_flow:
+  - {density: 0.055, mix: market, direction: 1, speed_scale: 0.55}
+  - {density: 0.045, mix: market, direction: -1, speed_scale: 0.55}
+
+chaos_effects: {wrong_way_riders: 2, extra_cattle: 1, barricades: 1,
+                rash_fraction: 0.35, aggression_gain: 0.3,
+                pedestrian_recklessness: 1.0, marking_degradation: 1.0,
+                density_gain: 0.5}

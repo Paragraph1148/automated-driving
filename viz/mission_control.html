@@ -93,6 +93,10 @@ h2{font-family:"IBM Plex Sans Condensed",sans-serif; font-size:11px; letter-spac
 .layers input{accent-color:var(--accent); width:15px; height:15px; cursor:pointer}
 .swatch{width:11px; height:11px; border-radius:2px; flex:none}
 
+.palette{display:grid; grid-template-columns:1fr 1fr; gap:6px}
+.palette button{text-align:left; padding:7px 9px; display:flex; align-items:center; gap:7px;
+                letter-spacing:.04em; font-size:11px}
+.palette button .swatch{width:9px;height:9px;border-radius:2px}
 .legend{display:flex; flex-direction:column; gap:6px; font-size:12.5px}
 .legend div{display:flex; align-items:center; gap:9px; color:var(--ink-2)}
 .legend .shape{width:22px; height:11px; border-radius:1.5px; flex:none}
@@ -162,6 +166,18 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
       </div>
     </div>
 
+    <div id="place-panel" hidden>
+      <h2>Drop a road user</h2>
+      <p style="margin:0 0 9px;color:var(--ink-2);font-size:12.5px">
+        Click the map to place. Shift-click removes. The planner has no
+        foreknowledge of anything you add.</p>
+      <div class="palette" id="palette"></div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button id="restart-ego">Reset vehicle</button>
+        <button id="pause-live" aria-pressed="false">Pause</button>
+      </div>
+    </div>
+
     <div>
       <h2>Layers</h2>
       <div class="layers" id="layers"></div>
@@ -185,6 +201,14 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
   </aside>
 
   <footer>
+    <span id="live-controls" hidden style="display:flex;gap:10px;align-items:center;flex:1">
+      <select id="scenario-pick" aria-label="Scenario"
+              style="font:inherit;font-size:12.5px;padding:6px 8px;border-radius:2px;
+                     background:var(--surface-2);color:var(--ink-1);border:1px solid var(--line)"></select>
+      <button id="rate-live">1×</button>
+      <span class="clock" id="live-clock">0.0 s</span>
+      <span class="clock" id="live-status" style="color:var(--ok)">connecting…</span>
+    </span>
     <button id="play" aria-label="Play or pause">Play</button>
     <button id="follow" aria-pressed="true">Follow</button>
     <input id="scrub" type="range" min="0" max="0" value="0" step="1" aria-label="Timeline">
@@ -198,7 +222,8 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
 (function(){
 "use strict";
 const RUN = JSON.parse(document.getElementById("run-data").textContent);
-const frames = RUN.frames, scene = RUN.scene;
+const LIVE = RUN.mode === "live";
+let frames = RUN.frames || [], scene = RUN.scene || {};
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
 const VEHICLE = new Set(["car","bus","truck","auto_rickshaw","parked_vehicle"]);
@@ -427,16 +452,16 @@ function updatePanel(f){
   const clr = d.path_clearance;
   document.getElementById("tile-clr").className =
     "tile" + (clr!=null && clr<0.3 ? " alert" : clr!=null && clr<0.7 ? " warn" : "");
-  document.getElementById("m-lat").textContent = num(RUN.latency_p95, 1);
-  document.getElementById("clock").textContent = `${f.t.toFixed(1)} s`;
-  document.getElementById("scrub").value = idx;
+  document.getElementById("m-lat").textContent =
+    num(LIVE ? d.replan_ms : RUN.latency_p95, 1);
+  if (!LIVE){
+    document.getElementById("clock").textContent = `${f.t.toFixed(1)} s`;
+    document.getElementById("scrub").value = idx;
+  }
 }
 
-document.getElementById("m-scenario").textContent = (RUN.scenario||"—").replace(/_/g," ");
-document.getElementById("m-chaos").textContent = num(RUN.chaos,2);
-document.getElementById("m-outcome").textContent = RUN.outcome||"—";
 const scrub = document.getElementById("scrub");
-scrub.max = frames.length-1;
+scrub.max = Math.max(0, frames.length-1);
 scrub.addEventListener("input", e => { idx = +e.target.value; draw(); });
 
 const playBtn = document.getElementById("play");
@@ -464,6 +489,131 @@ function tick(ts){
   if ((ts||0) - last > 60/rate){ last = ts||0; idx = (idx+1) % frames.length; draw(); }
   requestAnimationFrame(tick);
 }
-resize();
+// --------------------------------------------------------------------------
+// Live mode: the same renderer, fed by the running Python stack over a socket
+// instead of by an embedded recording. One renderer, two sources - so what a
+// judge drives on the day and what gets shared afterwards cannot drift apart.
+// --------------------------------------------------------------------------
+const PLACEABLE = [
+  ["two_wheeler",  "Two-wheeler", "traffic",  8.0],
+  ["cattle",       "Cow",         "cattle",   0.0],
+  ["auto_rickshaw","Auto",        "traffic",  6.0],
+  ["pedestrian",   "Pedestrian",  "traffic",  1.1],
+  ["two_wheeler",  "Wrong-way",   "wrong_way",9.0],
+  ["car",          "Rash driver", "rash",     9.0],
+  ["barricade",    "Barricade",   "static",   0.0],
+  ["parked_vehicle","Parked car", "static",   0.0],
+];
+let placeIdx = 0, ws = null, lastFrame = null;
+
+function screenToWorld(px, py){
+  const f = lastFrame || frame(); if (!f) return null;
+  const w = cv.width/dpr, h = cv.height/dpr;
+  const th = follow ? -f.ego.h : 0;
+  const cx = follow ? w*0.30 : w*0.5, cy = h*0.5;
+  const ox = follow ? f.ego.x : (scene.length||100)/2;
+  const oy = follow ? f.ego.y : 0;
+  const c = Math.cos(th), s = Math.sin(th);
+  const ux = (px-cx)/scale, uy = -(py-cy)/scale;
+  // Inverse of the forward rotation.
+  return [ox + ux*c + uy*s, oy - ux*s + uy*c];
+}
+
+function startLive(){
+  document.getElementById("place-panel").hidden = false;
+  document.getElementById("live-controls").hidden = false;
+  document.getElementById("play").hidden = true;
+  document.getElementById("scrub").hidden = true;
+  document.getElementById("clock").hidden = true;
+  document.getElementById("rate").hidden = true;
+
+  const pal = document.getElementById("palette");
+  PLACEABLE.forEach(([cls,label,policy], i) => {
+    const b = document.createElement("button");
+    b.innerHTML = `<span class="swatch" style="background:${hueFor(cls)}"></span>${label}`;
+    b.setAttribute("aria-pressed", String(i === 0));
+    b.addEventListener("click", () => {
+      placeIdx = i;
+      [...pal.children].forEach((c,j) => c.setAttribute("aria-pressed", String(j===i)));
+    });
+    pal.appendChild(b);
+  });
+
+  const status = document.getElementById("live-status");
+  const url = `ws://${location.hostname}:${Number(location.port||8420)+1}`;
+  ws = new WebSocket(url);
+  ws.addEventListener("open", () => { status.textContent = "live"; });
+  ws.addEventListener("close", () => {
+    status.textContent = "disconnected"; status.style.color = "var(--crit)"; });
+  ws.addEventListener("error", () => {
+    status.textContent = "no server"; status.style.color = "var(--crit)"; });
+  ws.addEventListener("message", ev => {
+    const msg = JSON.parse(ev.data);
+    if (msg.meta){
+      scene = msg.meta.scene;
+      document.getElementById("m-scenario").textContent =
+        msg.meta.scenario.replace(/_/g," ");
+      document.getElementById("m-chaos").textContent = num(msg.meta.chaos,2);
+      const pick = document.getElementById("scenario-pick");
+      if (!pick.options.length){
+        for (const s of msg.meta.scenarios){
+          const o = document.createElement("option");
+          o.value = s; o.textContent = s.replace(/_/g," "); pick.appendChild(o);
+        }
+        pick.addEventListener("change", () =>
+          ws.send(JSON.stringify({cmd:"load", scenario: pick.value})));
+      }
+      pick.value = msg.meta.scenario;
+      return;
+    }
+    lastFrame = msg; frames = [msg]; idx = 0;
+    document.getElementById("live-clock").textContent = `${msg.t.toFixed(1)} s`;
+    document.getElementById("m-outcome").textContent =
+      msg.outcome ? msg.outcome : "running";
+    draw();
+  });
+
+  cv.addEventListener("click", e => {
+    if (!ws || ws.readyState !== 1) return;
+    const r = cv.getBoundingClientRect();
+    const pt = screenToWorld(e.clientX - r.left, e.clientY - r.top);
+    if (!pt) return;
+    if (e.shiftKey){
+      ws.send(JSON.stringify({cmd:"remove", x:pt[0], y:pt[1]}));
+    } else {
+      const [cls,,policy,speed] = PLACEABLE[placeIdx];
+      ws.send(JSON.stringify({cmd:"place", cls, x:pt[0], y:pt[1], policy, speed}));
+    }
+  });
+  cv.style.cursor = "crosshair";
+
+  const pauseBtn = document.getElementById("pause-live");
+  let paused = false;
+  pauseBtn.addEventListener("click", () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? "Resume" : "Pause";
+    pauseBtn.setAttribute("aria-pressed", String(paused));
+    ws.send(JSON.stringify({cmd:"pause", value:paused}));
+  });
+  document.getElementById("restart-ego").addEventListener("click", () =>
+    ws.send(JSON.stringify({cmd:"restart_ego"})));
+  const rateLive = document.getElementById("rate-live");
+  let lr = 1;
+  rateLive.addEventListener("click", () => {
+    lr = lr === 1 ? 2 : lr === 2 ? 0.5 : 1;
+    rateLive.textContent = lr + "×";
+    ws.send(JSON.stringify({cmd:"rate", value:lr}));
+  });
+}
+
+if (LIVE){
+  startLive();
+  resize();
+} else {
+  document.getElementById("m-scenario").textContent = (RUN.scenario||"—").replace(/_/g," ");
+  document.getElementById("m-chaos").textContent = num(RUN.chaos,2);
+  document.getElementById("m-outcome").textContent = RUN.outcome||"—";
+  resize();
+}
 })();
 </script>

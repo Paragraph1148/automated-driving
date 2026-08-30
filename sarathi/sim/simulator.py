@@ -6,6 +6,7 @@ the ablation study meaningful rather than anecdotal.
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 
@@ -75,6 +76,53 @@ class Simulator:
                                 float(ref.heading_at(spec["s"])), spec["speed"]))
         self.agents[EGO_ID] = ego
         self.ego = ego
+
+    # -- live editing -----------------------------------------------------
+    def spawn(self, cls: AgentClass, x: float, y: float,
+              heading: float | None = None, speed: float | None = None,
+              policy: str | None = None, aggression: float = 1.0) -> int:
+        """Add a road user mid-run, at a world position.
+
+        This is what makes the demo defensible rather than decorative: a judge
+        drops a two-wheeler in front of the vehicle and watches the same planner,
+        with no foreknowledge of it, perceive and react to it.
+        """
+        ref = self.corridor.reference
+        s, _ = ref.to_frenet(np.array([x, y], dtype=float))
+        if heading is None:
+            heading = float(ref.heading_at(s))
+        if policy is None:
+            policy = "static" if cls.is_static else "traffic"
+        if speed is None:
+            speed = 0.0 if cls.is_static else params_for(cls).v_desired * 0.6
+        if policy in ("oncoming", "wrong_way"):
+            heading = float(heading + math.pi)
+
+        agent_id = self._next_agent_id()
+        agent = Agent(id=agent_id, cls=cls,
+                      state=State(float(x), float(y), float(heading),
+                                  float(max(speed, 0.0))),
+                      aggression=aggression)
+        self.agents[agent_id] = agent
+        self.policies[agent_id] = build_policy(policy)
+        return agent_id
+
+    def despawn_near(self, x: float, y: float, radius: float = 3.0) -> int | None:
+        """Remove the nearest road user to a point. Never the ego."""
+        point = np.array([x, y], dtype=float)
+        best, best_dist = None, radius
+        for aid, agent in self.agents.items():
+            if aid == EGO_ID or not agent.active:
+                continue
+            dist = float(np.linalg.norm(agent.state.position - point))
+            if dist < best_dist:
+                best, best_dist = aid, dist
+        if best is not None:
+            self.agents[best].active = False
+        return best
+
+    def _next_agent_id(self) -> int:
+        return max(self.agents) + 1 if self.agents else 1
 
     # -- main loop --------------------------------------------------------
     def run(self, verbose: bool = False) -> RunResult:

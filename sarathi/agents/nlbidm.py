@@ -127,6 +127,16 @@ def longitudinal_accel(cls: AgentClass, params: ClassParams, aggression: float,
         w = separation_ratio(d, half_w, nb.d, nb.half_width, influence)
         if w <= 1e-3:
             continue
+
+        # Being *alongside* something is not a following problem. When the two
+        # footprints overlap longitudinally but are laterally clear, the geometric
+        # gap goes negative, the IDM interaction term saturates, and the agent
+        # brakes at maximum for ever - even while the other vehicle drives away.
+        # In mixed traffic, where everything sits laterally offset from everything
+        # else, this froze two-wheelers beside slower vehicles permanently.
+        # Genuine overlap (laterally overlapping too, w == 1) still brakes.
+        if gap <= 0.0 and w < 0.999:
+            continue
         # Head-on traffic closes at the sum of speeds; that is exactly the
         # wrong-way case, and it must dominate the interaction term.
         delta_v = speed - nb.s_dot

@@ -10,3 +10,4 @@ data/
 *.slx.autosave
 slprj/
 artifacts/mission-control.html
+viz/live.html

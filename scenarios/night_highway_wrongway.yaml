@@ -1,0 +1,48 @@
+name: night_highway_wrongway
+description: >
+  An unlit rural highway after dark. Sensor visibility is halved, so detections
+  come later and classification is less certain - which is exactly when a rider
+  travelling the wrong way down the carriageway appears. The scenario exists to
+  show that the planner degrades gracefully rather than abruptly: the prediction
+  hypotheses widen, the risk field grows, and the vehicle slows before it can
+  identify what it is slowing for.
+tags: [required-extra, highway, night, wrong-way, degraded-sensing]
+seed: 127
+duration: 85.0
+dt: 0.05
+chaos: 0.45
+visibility: 0.5
+
+corridor:
+  geometry:
+    segments:
+      - {type: straight, length: 90}
+      - {type: arc, radius: 260, angle_deg: 20}
+      - {type: straight, length: 80}
+  width:
+    - [0,   4.2, 4.2]
+    - [260, 4.2, 4.2]
+  road_type: two_way
+  lane_marking_quality: 0.35
+  surface_quality: 0.7
+  defects:
+    - {s: 120, d: 1.4, radius: 1.2, severity: 0.65}
+    - {s: 190, d: -1.2, radius: 1.0, severity: 0.5}
+
+ego: {s: 5.0, d: 2.0, speed: 15.0, goal_s: 245.0}
+
+agents:
+  - {cls: two_wheeler, policy: wrong_way, s: 120, d: 2.4, speed: 11.0, aggression: 1.5}
+  - {cls: two_wheeler, policy: wrong_way, s: 195, d: 2.2, speed: 9.0,  aggression: 1.3}
+  - {cls: truck,  policy: traffic,  s: 70,  d: 1.8, speed: 7.5}
+  - {cls: pushcart, policy: traffic, s: 150, d: 3.4, speed: 1.1}
+  - {cls: cattle, policy: cattle,   s: 210, d: 1.0}
+
+traffic_flow:
+  - {density: 0.030, mix: highway, direction: 1, speed_scale: 0.8}
+  - {density: 0.025, mix: highway, direction: -1, speed_scale: 0.8}
+
+chaos_effects: {wrong_way_riders: 3, extra_cattle: 2, barricades: 2,
+                rash_fraction: 0.4, aggression_gain: 0.45,
+                pedestrian_recklessness: 0.7, marking_degradation: 1.0,
+                density_gain: 0.5}

@@ -56,6 +56,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    from .serve import run
+    run(args.scenario, args.chaos, args.seed, args.port)
+    return 0
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     for path in sorted(glob.glob("scenarios/*.yaml")):
         sc = load_scenario(path)
@@ -82,6 +88,13 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--no-planner-layers", action="store_true",
                      help="record only poses, omitting risk field and candidate fan")
     run.set_defaults(func=cmd_run)
+
+    srv = sub.add_parser("serve", help="run the live interactive demo")
+    srv.add_argument("--scenario", default="village_road_unmarked")
+    srv.add_argument("--chaos", type=float, default=None)
+    srv.add_argument("--seed", type=int, default=None)
+    srv.add_argument("--port", type=int, default=8420)
+    srv.set_defaults(func=cmd_serve)
 
     lst = sub.add_parser("list", help="list available scenarios")
     lst.set_defaults(func=cmd_list)

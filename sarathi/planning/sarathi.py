@@ -91,10 +91,12 @@ class SarathiController(EgoController):
         self._prev_d_ddot = 0.0
         self._prev_s_ddot = 0.0
         self._prev_accel = 0.0
+        self._debug_cache: dict = {}
 
     def reset(self, scenario) -> None:
         self._reset_state()
-        self.sensors = SensorSuite(seed=self.seed + scenario.seed)
+        self.sensors = SensorSuite(seed=self.seed + scenario.seed,
+                                   visibility=getattr(scenario, "visibility", 1.0))
         self.tracker = Tracker(scenario.dt * self.cfg.perception_divisor)
         self.behaviour.cfg.desired_speed = self.cfg.desired_speed
 
@@ -181,11 +183,12 @@ class SarathiController(EgoController):
                 self.params.width / 2.0, dt, accel)
             accel = verdict.accel_cap
 
+        self._debug_cache = self._debug(decision, best, verdict, solution)
         return ControlCommand(
             float(np.clip(accel, -self.params.b_max, self.params.a_max)),
             float(np.clip(steer, -max_steer_for(AgentClass.CAR),
                           max_steer_for(AgentClass.CAR))),
-            self._debug(decision, best, verdict, solution))
+            self._debug_cache)
 
     # -- stages ------------------------------------------------------------
     def _perceive(self, ego, view, corridor, d_ego: float) -> None:

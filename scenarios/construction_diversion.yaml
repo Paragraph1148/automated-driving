@@ -1,0 +1,55 @@
+name: construction_diversion
+description: >
+  Roadworks with no advance warning and no marked diversion. Barricades close
+  alternating halves of the carriageway, so the only way through is a slalom that
+  repeatedly puts the vehicle on the wrong side of the road with oncoming traffic
+  present. Excavated surface between the barricades makes the whole section a
+  traversable-cost problem rather than a free-space one.
+tags: [required-extra, urban, roadworks, barricades, slalom]
+seed: 139
+duration: 100.0
+dt: 0.05
+chaos: 0.4
+
+corridor:
+  geometry:
+    segments:
+      - {type: straight, length: 60}
+      - {type: arc, radius: 90, angle_deg: 25}
+      - {type: straight, length: 60}
+  width:
+    - [0,   4.0, 4.0]
+    - [160, 4.0, 4.0]
+  road_type: two_way
+  lane_marking_quality: 0.1
+  surface_quality: 0.2
+  defects:
+    - {s: 44, d: 1.2,  radius: 1.5, severity: 0.85}
+    - {s: 58, d: -1.0, radius: 1.4, severity: 0.8}
+    - {s: 76, d: 0.8,  radius: 1.6, severity: 0.9}
+    - {s: 96, d: -0.9, radius: 1.3, severity: 0.7}
+
+ego: {s: 4.0, d: 1.6, speed: 9.0, goal_s: 150.0}
+
+agents:
+  - {cls: barricade, policy: static, s: 40, d: 2.6}
+  - {cls: barricade, policy: static, s: 44, d: 2.1}
+  - {cls: barricade, policy: static, s: 48, d: 1.6}
+  - {cls: barricade, policy: static, s: 64, d: -2.6}
+  - {cls: barricade, policy: static, s: 68, d: -2.1}
+  - {cls: barricade, policy: static, s: 72, d: -1.6}
+  - {cls: barricade, policy: static, s: 92, d: 2.5}
+  - {cls: barricade, policy: static, s: 96, d: 2.0}
+  - {cls: parked_vehicle, policy: static, s: 112, d: -2.4}
+  - {cls: truck,  policy: oncoming, s: 130, d: -1.6, speed: 6.5}
+  - {cls: two_wheeler, policy: rash, s: 20, d: 1.0, speed: 9.0, aggression: 1.6}
+  - {cls: pushcart, policy: traffic, s: 84, d: 1.8, speed: 1.0}
+
+traffic_flow:
+  - {density: 0.035, mix: default, direction: 1, speed_scale: 0.7}
+  - {density: 0.030, mix: default, direction: -1, speed_scale: 0.7}
+
+chaos_effects: {wrong_way_riders: 2, extra_cattle: 1, barricades: 4,
+                rash_fraction: 0.45, aggression_gain: 0.4,
+                pedestrian_recklessness: 0.7, marking_degradation: 1.0,
+                density_gain: 0.5}

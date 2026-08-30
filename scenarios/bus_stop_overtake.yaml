@@ -1,0 +1,50 @@
+name: bus_stop_overtake
+description: >
+  An informal bus stop on a two-lane road: the bus halts in the carriageway
+  itself, passengers step off into the road on both sides, and a queue forms
+  behind it. Waiting is not the answer - the bus will sit for twenty seconds and
+  traffic behind expects to be overtaken past it - but committing to the
+  overtake means using the oncoming half while a truck approaches.
+tags: [required-extra, urban, overtake, bus-stop, oncoming]
+seed: 149
+duration: 90.0
+dt: 0.05
+chaos: 0.35
+
+corridor:
+  geometry:
+    segments:
+      - {type: straight, length: 70}
+      - {type: arc, radius: 180, angle_deg: 15}
+      - {type: straight, length: 60}
+  width:
+    - [0,   3.9, 3.9]
+    - [180, 3.9, 3.9]
+  road_type: two_way
+  lane_marking_quality: 0.4
+  surface_quality: 0.55
+  defects:
+    - {s: 100, d: 1.6, radius: 1.0, severity: 0.5}
+
+ego: {s: 4.0, d: 1.8, speed: 11.0, goal_s: 165.0}
+
+agents:
+  - {cls: bus, policy: sudden_stop, s: 40, d: 2.0, speed: 9.0,
+     args: {stop_at_s: 72.0, hold: 22.0}}
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 76, d: 3.2,
+     args: {cross_to: -2.5, recklessness: 0.8, start_delay: 12.0}}
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 70, d: 3.0,
+     args: {cross_to: 3.6, recklessness: 0.5, start_delay: 14.0}}
+  - {cls: auto_rickshaw, policy: traffic, s: 22, d: 1.9, speed: 9.0}
+  - {cls: two_wheeler,  policy: rash, s: 12, d: 2.6, speed: 12.0, aggression: 1.6}
+  - {cls: truck, policy: oncoming, s: 128, d: -1.9, speed: 10.0}
+  - {cls: car,   policy: oncoming, s: 160, d: -1.8, speed: 11.5}
+
+traffic_flow:
+  - {density: 0.040, mix: default, direction: 1}
+  - {density: 0.035, mix: default, direction: -1}
+
+chaos_effects: {wrong_way_riders: 2, extra_cattle: 1, barricades: 1,
+                rash_fraction: 0.4, aggression_gain: 0.4,
+                pedestrian_recklessness: 0.8, marking_degradation: 1.0,
+                density_gain: 0.5}

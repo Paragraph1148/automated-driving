@@ -106,6 +106,9 @@ class Scenario:
     dt: float
     seed: int
     goal_s: float
+    #: Sensor visibility multiplier: 1.0 clear daylight, lower for dust, glare,
+    #: rain or night. Scales every detection probability and noise term.
+    visibility: float = 1.0
     tags: list[str] = field(default_factory=list)
 
 
@@ -211,6 +214,7 @@ def scenario_from_dict(raw: dict, chaos: float | None = None,
         dt=float(raw.get("dt", 0.05)),
         seed=int(raw.get("seed", 0) if seed is None else seed),
         goal_s=goal_s,
+        visibility=float(raw.get("visibility", 1.0)),
         tags=list(raw.get("tags", []) or []),
     )
 
@@ -324,11 +328,21 @@ def populate(scenario: Scenario, rng: np.random.Generator
             else:
                 policy, args = "traffic", {}
             if cls is AgentClass.PEDESTRIAN:
-                policy = "pedestrian_crossing"
-                args = {"cross_to": float(rng.uniform(float(d_min), float(d_max))),
-                        "recklessness": fx.pedestrian_recklessness * chaos,
-                        "start_delay": float(rng.uniform(0.0, 15.0))}
-                speed = 0.0
+                # Only some pedestrians are crossing. The rest walk *along* the
+                # carriageway edge, which is what a market street actually looks
+                # like - a scene of people all standing still waiting for a gap
+                # reads as a frozen simulation, not a busy road.
+                if rng.random() < 0.55:
+                    policy = "pedestrian_crossing"
+                    args = {"cross_to": float(rng.uniform(float(d_min),
+                                                          float(d_max))),
+                            "recklessness": fx.pedestrian_recklessness * chaos,
+                            "start_delay": float(rng.uniform(0.0, 12.0))}
+                    speed = 0.0
+                else:
+                    policy, args = "traffic", {}
+                    speed = float(rng.uniform(0.7, 1.4))
+                    d = float(np.clip(d, lo_t + 0.4, hi_t - 0.4))
             place(cls, s, d, speed, policy, args, aggression)
 
     # 3. Chaos-driven hazards. These are the specifically Indian failure modes,

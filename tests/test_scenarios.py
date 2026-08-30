@@ -15,6 +15,7 @@ from sarathi.planning.baseline import BaselineLaneFollower
 from sarathi.sim.simulator import EGO_ID, Simulator
 from sarathi.world.scenario import load_scenario, populate
 
+#: The five the problem statement names by name.
 REQUIRED = [
     "scenarios/village_road_unmarked.yaml",
     "scenarios/urban_intersection_unsignalled.yaml",
@@ -22,6 +23,15 @@ REQUIRED = [
     "scenarios/market_dense_mixed.yaml",
     "scenarios/cattle_crossing_sudden.yaml",
 ]
+#: Every scenario, including the extras. A judge picks from this list live, so
+#: all of them have to load and spawn cleanly, not just the mandated five.
+ALL_SCENARIOS = sorted(glob.glob("scenarios/*.yaml"))
+
+
+def test_every_scenario_has_a_distinct_name():
+    """The live picker lists them by name; duplicates would be unpickable."""
+    names = [load_scenario(p).name for p in ALL_SCENARIOS]
+    assert len(names) == len(set(names))
 
 
 def test_all_five_required_scenarios_exist():
@@ -30,18 +40,18 @@ def test_all_five_required_scenarios_exist():
     assert set(REQUIRED) <= found
 
 
-@pytest.mark.parametrize("path", REQUIRED)
+@pytest.mark.parametrize("path", ALL_SCENARIOS)
 def test_scenario_loads_and_is_self_consistent(path):
     sc = load_scenario(path)
     assert sc.corridor.reference.length > 50.0
     assert 0.0 <= sc.chaos <= 1.0
     assert sc.goal_s <= sc.corridor.reference.length
     assert sc.ego["s"] < sc.goal_s
-    assert "required" in sc.tags
+    assert any(t.startswith("required") for t in sc.tags)
     assert float(sc.corridor.width_at(sc.ego["s"])) > 2.0
 
 
-@pytest.mark.parametrize("path", REQUIRED)
+@pytest.mark.parametrize("path", ALL_SCENARIOS)
 def test_nothing_spawns_inside_anything_else(path):
     sc = load_scenario(path)
     agents, _ = populate(sc, np.random.default_rng(sc.seed))
@@ -53,7 +63,7 @@ def test_nothing_spawns_inside_anything_else(path):
                 f"{path}: agents {a} and {b} spawned overlapping"
 
 
-@pytest.mark.parametrize("path", REQUIRED)
+@pytest.mark.parametrize("path", ALL_SCENARIOS)
 def test_ego_starts_with_clear_road(path):
     """A scenario that starts the ego 1 m behind a stopped bus measures nothing."""
     sc = load_scenario(path)
