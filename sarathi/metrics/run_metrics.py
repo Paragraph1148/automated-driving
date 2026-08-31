@@ -38,6 +38,12 @@ class RunMetrics:
     #: pedestrian brushing a stationary vehicle at 0.13 m/s and striking a cow at
     #: 12 m/s are not the same failure, and averaging them hides both.
     impact_speed: float = 0.0
+    #: Our own speed at the moment of contact, and where the other body was
+    #: relative to our nose (0 deg ahead, +-180 behind). Together these separate
+    #: "we drove into it" from "it drove into us while we were stopped", which
+    #: a raw collision count cannot, and which changes what the fix should be.
+    ego_speed_at_impact: float = 0.0
+    impact_bearing_deg: float = 0.0
     timed_out: bool = False
     left_corridor: bool = False
 
@@ -154,12 +160,16 @@ class MetricsAccumulator:
 
     def finalise(self, completed: bool, collision: bool,
                  collision_with: str | None, left_corridor: bool,
-                 ego_s: float, impact_speed: float = 0.0) -> RunMetrics:
+                 ego_s: float, impact_speed: float = 0.0,
+                 ego_speed_at_impact: float = 0.0,
+                 impact_bearing_deg: float = 0.0) -> RunMetrics:
         m = self.m
         m.completed = completed
         m.collision = collision
         m.collision_with = collision_with
         m.impact_speed = float(impact_speed)
+        m.ego_speed_at_impact = float(ego_speed_at_impact)
+        m.impact_bearing_deg = float(impact_bearing_deg)
         m.left_corridor = left_corridor
         m.timed_out = not (completed or collision or left_corridor)
         m.goal_progress = float(np.clip(ego_s / max(self.goal_s, 1e-6), 0.0, 1.0))

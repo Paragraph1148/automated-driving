@@ -146,9 +146,11 @@ class LiveSession:
                        "l": round(a.params.length, 2),
                        "w": round(a.params.width, 2)}
                 (ego_row.update(row) if a.id == ego.id else rows.append(row))
+            debug = dict(sim.controller._debug_cache) \
+                if hasattr(sim.controller, "_debug_cache") else {}
+            debug["replan_ms"] = round(sim.last_replan_ms, 1)
             payload = {"t": round(sim.t, 2), "ego": ego_row, "agents": rows,
-                       "debug": dict(sim.controller._debug_cache)
-                       if hasattr(sim.controller, "_debug_cache") else {}}
+                       "debug": debug}
             payload.update(planner_snapshot(sim.controller, ego))
             payload["events"] = list(sim.events)
             payload["held"] = sorted(sim.held)

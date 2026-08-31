@@ -29,6 +29,11 @@ import numpy as np
 from ..core.types import AgentClass, ClassParams
 
 IDM_DELTA = 4.0          # IDM free-flow exponent
+
+#: Lateral clearance, in metres, below which two bodies passing each other are
+#: close enough that the following term must stay on. Wider than a scrape,
+#: narrower than the 0.4 m a two-wheeler will happily pass a bus with.
+SIDE_CLEARANCE = 0.25
 MAX_INTERACTION = 12.0   # clamp on the IDM interaction term, keeps braking finite
 #: Lateral agility below which a class simply does not filter through traffic.
 #: Buses (0.5) and handcarts (0.4) sit below it; autos, cars and two-wheelers above.
@@ -134,8 +139,14 @@ def longitudinal_accel(cls: AgentClass, params: ClassParams, aggression: float,
         # brakes at maximum for ever - even while the other vehicle drives away.
         # In mixed traffic, where everything sits laterally offset from everything
         # else, this froze two-wheelers beside slower vehicles permanently.
-        # Genuine overlap (laterally overlapping too, w == 1) still brakes.
-        if gap <= 0.0 and w < 0.999:
+        #
+        # "Laterally clear" has to mean clear by a margin, though, not clear by a
+        # millimetre. Skipping on any positive lateral gap let a vehicle close on
+        # a stopped one, cross the point where the longitudinal gap goes negative,
+        # stop braking, and scrape down its flank - which is how a stationary ego
+        # was being struck at 4 m/s by traffic that had every chance to stop.
+        lat_gap = abs(d - nb.d) - (half_w + nb.half_width)
+        if gap <= 0.0 and lat_gap > SIDE_CLEARANCE:
             continue
         # Head-on traffic closes at the sum of speeds; that is exactly the
         # wrong-way case, and it must dominate the interaction term.

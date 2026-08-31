@@ -306,10 +306,14 @@ def populate(scenario: Scenario, rng: np.random.Generator
                 d_min_t, d_max_t = corridor.bounds_at(s_try)
                 lo_t, hi_t = (0.2, float(d_max_t)) if flow.direction > 0 else \
                              (float(d_min_t), -0.2)
-                if hi_t - lo_t < p.width:
+                # Compare the *inset* band rather than the raw one: subtracting
+                # half a width from each end and comparing the results is the
+                # only test that agrees with the sampler at the boundary, where
+                # rounding can otherwise make an admissible band unsamplable.
+                lo_in, hi_in = lo_t + p.width / 2.0, hi_t - p.width / 2.0
+                if hi_in < lo_in:
                     continue
-                d_try = float(rng.uniform(lo_t + p.width / 2.0,
-                                          hi_t - p.width / 2.0))
+                d_try = float(rng.uniform(lo_in, hi_in))
                 if _is_free(s_try, d_try, p.length / 2.0, p.width / 2.0):
                     spot = (s_try, d_try)
                     break
@@ -353,7 +357,11 @@ def populate(scenario: Scenario, rng: np.random.Generator
         for _attempt in range(16):
             s_try = float(rng.uniform(s_lo, s_hi))
             d_min_t, d_max_t = corridor.bounds_at(s_try)
-            d_try = d_fn(float(d_min_t), float(d_max_t))
+            lo_b, hi_b = float(d_min_t), float(d_max_t)
+            if hi_b - lo_b < p.width:
+                continue          # nothing this wide fits here
+            d_try = float(np.clip(d_fn(lo_b, hi_b),
+                                  lo_b + p.width / 2.0, hi_b - p.width / 2.0))
             if _is_free(s_try, d_try, p.length / 2.0, p.width / 2.0):
                 place(cls, s_try, d_try, speed, policy, {}, aggression)
                 return
@@ -365,7 +373,8 @@ def populate(scenario: Scenario, rng: np.random.Generator
 
     for _ in range(int(round(fx.extra_cattle * chaos))):
         _place_hazard(AgentClass.CATTLE, 0.2 * ref.length, 0.95 * ref.length,
-                      lambda lo, hi: float(rng.uniform(lo + 1.0, hi - 1.0)),
+                      lambda lo, hi: float(rng.uniform(
+                          min(lo + 1.0, hi), max(lo, hi - 1.0))),
                       0.0, "cattle", 1.0)
 
     for _ in range(int(round(fx.barricades * chaos))):
