@@ -9,8 +9,16 @@ artifacts/**/*.png
 !artifacts/.gitkeep
 # The evidence behind every number in the decks and the report, and the figures
 # those decks embed: small, and useless to a reviewer if they are not in the repo.
+# Only the figures the decks embed; other captures stay local scratch.
 !artifacts/benchmark.json
-!artifacts/fig-*.png
+!artifacts/fig-bev.png
+!artifacts/fig-console.png
+!artifacts/fig-console-bev.png
+!artifacts/fig-cow.png
+!artifacts/fig-cow-bev.png
+!artifacts/fig-night.png
+!artifacts/fig-night-bev.png
+!artifacts/fig-thresholds.png
 data/
 *.slx.autosave
 slprj/
