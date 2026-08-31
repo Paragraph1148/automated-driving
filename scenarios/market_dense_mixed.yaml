@@ -1,0 +1,68 @@
+name: market_dense_mixed
+description: >
+  PS scenario 4 - a dense market area with mixed traffic. The hardest of the five.
+  Roadside parking and vendor encroachment have eaten the effective carriageway
+  down to about 5 m, pedestrians step out between parked vehicles with almost no
+  gap acceptance, pushcarts are stationary in the road, and two-wheelers filter
+  through whatever space is left. Progress here is measured in creeping, not speed.
+tags: [required, market, dense, encroachment, vru]
+seed: 53
+duration: 110.0
+dt: 0.05
+chaos: 0.55
+
+corridor:
+  geometry:
+    segments:
+      - {type: straight, length: 45}
+      - {type: arc, radius: 60, angle_deg: 35}
+      - {type: straight, length: 45}
+  width:
+    - [0,   4.2, 4.2]
+    - [30,  3.4, 3.4]
+    - [70,  3.0, 3.0]
+    - [130, 4.0, 4.0]
+  road_type: two_way
+  lane_marking_quality: 0.0
+  surface_quality: 0.30
+  defects:
+    - {s: 25, d: -1.2, radius: 1.0, severity: 0.65}
+    - {s: 58, d: 1.0,  radius: 1.3, severity: 0.75}
+    - {s: 90, d: -0.8, radius: 0.9, severity: 0.50}
+
+ego: {s: 3.0, d: 1.4, speed: 5.0, goal_s: 122.0}
+
+agents:
+  # Roadside parking eating into the carriageway on both sides.
+  - {cls: parked_vehicle, policy: static, s: 22, d: 3.2}
+  - {cls: parked_vehicle, policy: static, s: 31, d: 3.1}
+  - {cls: parked_vehicle, policy: static, s: 48, d: -2.6}
+  - {cls: parked_vehicle, policy: static, s: 57, d: -2.6}
+  - {cls: parked_vehicle, policy: static, s: 84, d: 2.6}
+  - {cls: pushcart, policy: static, s: 66, d: 1.6}
+  - {cls: pushcart, policy: static, s: 100, d: -1.8}
+  # Pedestrians stepping out from between the parked vehicles.
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 36, d: 2.9,
+     args: {cross_to: -2.5, recklessness: 0.75, start_delay: 4.0}}
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 62, d: -2.4,
+     args: {cross_to: 2.4, recklessness: 0.85, start_delay: 11.0}}
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 92, d: 2.4,
+     args: {cross_to: -2.4, recklessness: 0.65, start_delay: 20.0}}
+  - {cls: stray_dog, policy: cattle, s: 74, d: 0.5}
+  - {cls: two_wheeler, policy: rash, s: 20, d: 0.6, speed: 8.0, aggression: 1.6}
+  - {cls: auto_rickshaw, policy: sudden_stop, s: 45, d: 1.8, speed: 5.0,
+     args: {stop_at_s: 78.0, hold: 12.0}}
+
+traffic_flow:
+  - {density: 0.13, mix: market, direction: 1, speed_scale: 0.6}
+  - {density: 0.10, mix: market, direction: -1, speed_scale: 0.6}
+
+chaos_effects:
+  wrong_way_riders: 3
+  extra_cattle: 2
+  barricades: 2
+  rash_fraction: 0.50
+  aggression_gain: 0.35
+  pedestrian_recklessness: 0.9
+  marking_degradation: 1.0
+  density_gain: 0.5

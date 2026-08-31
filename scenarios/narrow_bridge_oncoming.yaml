@@ -1,0 +1,48 @@
+name: narrow_bridge_oncoming
+description: >
+  A single-track causeway barely wider than one vehicle, with solid parapets and
+  no passing place along its length. A bus is already committed from the far end.
+  There is no lane to keep and no shoulder to use - the only options are to
+  commit, to hold back at the approach, or to squeeze. This is the case that most
+  cleanly separates a planner that negotiates from one that follows a lane.
+tags: [required-extra, village, bridge, negotiation, narrow]
+seed: 101
+duration: 80.0
+dt: 0.05
+chaos: 0.25
+
+corridor:
+  geometry:
+    segments:
+      - {type: straight, length: 45}
+      - {type: arc, radius: 70, angle_deg: 18}
+      - {type: straight, length: 55}
+  width:
+    - [0,   3.4, 3.4]
+    - [38,  2.1, 2.1]
+    - [45,  1.9, 1.9]
+    - [78,  1.9, 1.9]
+    - [86,  3.4, 3.4]
+    - [120, 3.6, 3.6]
+  road_type: two_way
+  lane_marking_quality: 0.0
+  surface_quality: 0.45
+  defects:
+    - {s: 58, d: 0.5, radius: 0.9, severity: 0.6}
+
+ego: {s: 4.0, d: 1.3, speed: 9.0, goal_s: 112.0}
+
+agents:
+  - {cls: bus,         policy: oncoming, s: 96, d: -0.8, speed: 7.0}
+  - {cls: two_wheeler, policy: oncoming, s: 74, d: -0.6, speed: 10.0, aggression: 1.4}
+  - {cls: bicycle,     policy: traffic,  s: 30, d: 1.6, speed: 3.2}
+  - {cls: cattle,      policy: cattle,   s: 88, d: 0.4}
+
+traffic_flow:
+  - {density: 0.020, mix: default, direction: 1}
+  - {density: 0.018, mix: default, direction: -1}
+
+chaos_effects: {wrong_way_riders: 1, extra_cattle: 1, barricades: 1,
+                rash_fraction: 0.3, aggression_gain: 0.4,
+                pedestrian_recklessness: 0.6, marking_degradation: 1.0,
+                density_gain: 0.4}

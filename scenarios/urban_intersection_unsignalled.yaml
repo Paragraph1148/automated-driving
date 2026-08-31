@@ -1,0 +1,65 @@
+name: urban_intersection_unsignalled
+description: >
+  PS scenario 2 - a busy urban intersection with no signals and no priority
+  markings. The junction mouth flares out to 16 m, cross traffic enters from both
+  arms at once, and nobody has right of way in practice: vehicles creep into the
+  conflict zone and the outcome is settled by whoever commits first. Pedestrians
+  cross through the middle of the junction rather than at any marked point.
+tags: [required, urban, intersection, unsignalled, negotiation]
+seed: 23
+duration: 75.0
+dt: 0.05
+chaos: 0.45
+
+corridor:
+  geometry:
+    segments:
+      - {type: straight, length: 130}
+  width:
+    - [0,   3.6, 3.6]
+    - [52,  3.6, 3.6]
+    - [62,  8.0, 8.0]      # junction mouth flares open
+    - [78,  8.0, 8.0]
+    - [88,  3.6, 3.6]
+    - [130, 3.6, 3.6]
+  road_type: two_way
+  lane_marking_quality: 0.25
+  surface_quality: 0.55
+  defects:
+    - {s: 70, d: -2.0, radius: 1.3, severity: 0.60}
+    - {s: 96, d: 1.5,  radius: 0.8, severity: 0.40}
+
+ego: {s: 5.0, d: 1.6, speed: 9.0, goal_s: 122.0}
+
+agents:
+  # Cross traffic entering the junction from the ego's left and right.
+  - {cls: auto_rickshaw, policy: cross_traffic, s: 70, d: -7.0, speed: 5.0,
+     args: {heading_deg: 88,  target_speed: 5.5, assertiveness: 0.65}}
+  - {cls: two_wheeler,   policy: cross_traffic, s: 74, d: 7.0,  speed: 7.0,
+     args: {heading_deg: -92, target_speed: 7.0, assertiveness: 0.80}}
+  - {cls: car,           policy: cross_traffic, s: 66, d: -7.5, speed: 4.0,
+     args: {heading_deg: 90,  target_speed: 5.0, assertiveness: 0.35}}
+  - {cls: two_wheeler,   policy: cross_traffic, s: 78, d: -7.0, speed: 8.0,
+     args: {heading_deg: 85,  target_speed: 8.0, assertiveness: 0.75}}
+  # Pedestrians crossing through the junction, not at any marked point.
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 68, d: 3.5,
+     args: {cross_to: -3.5, recklessness: 0.55, start_delay: 6.0}}
+  - {cls: pedestrian, policy: pedestrian_crossing, s: 84, d: -3.0,
+     args: {cross_to: 3.0, recklessness: 0.35, start_delay: 14.0}}
+  # A bus stopping dead in the junction mouth to pick up a fare.
+  - {cls: bus, policy: sudden_stop, s: 40, d: 2.2, speed: 8.0,
+     args: {stop_at_s: 64.0, hold: 9.0}}
+
+traffic_flow:
+  - {density: 0.075, mix: default, direction: 1}
+  - {density: 0.065, mix: default, direction: -1}
+
+chaos_effects:
+  wrong_way_riders: 3
+  extra_cattle: 1
+  barricades: 2
+  rash_fraction: 0.45
+  aggression_gain: 0.50
+  pedestrian_recklessness: 0.85
+  marking_degradation: 1.0
+  density_gain: 0.7
