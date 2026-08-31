@@ -7,6 +7,10 @@ artifacts/**/*.json
 artifacts/**/*.mp4
 artifacts/**/*.png
 !artifacts/.gitkeep
+# The evidence behind every number in the decks and the report, and the figures
+# those decks embed: small, and useless to a reviewer if they are not in the repo.
+!artifacts/benchmark.json
+!artifacts/fig-*.png
 data/
 *.slx.autosave
 slprj/

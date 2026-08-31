@@ -295,8 +295,14 @@ def render(path, outdir, scale=120):
     made = []
 
     for n, slide in enumerate(prs.slides, 1):
-        img = Image.new("RGB", (W, H), "white")
+        bg = solid_fill(slide._element.find(qn("p:cSld")).find(qn("p:bg")), theme) \
+            if slide._element.find(qn("p:cSld")).find(qn("p:bg")) is not None else None
+        if bg is None:
+            bgpr = slide._element.find(f".//{qn('p:bgPr')}")
+            bg = solid_fill(bgpr, theme) if bgpr is not None else None
+        img = Image.new("RGB", (W, H), bg or (255, 255, 255))
         d = ImageDraw.Draw(img)
+        slide_dark = bool(bg) and sum(bg) < 330
         for sh in slide.shapes:
             try:
                 x = int(Emu(sh.left or 0).inches * scale)
@@ -315,8 +321,12 @@ def render(path, outdir, scale=120):
 
             if sh.shape_type == 13:  # picture
                 try:
-                    pic = Image.open(BytesIO(sh.image.blob)).convert("RGB")
-                    img.paste(pic.resize((max(w, 1), max(h, 1))), (x, y))
+                    pic = Image.open(BytesIO(sh.image.blob))
+                    pic = pic.convert("RGBA").resize((max(w, 1), max(h, 1)))
+                    # Template art is transparent PNG; pasting it opaque turns a
+                    # logo into a black rectangle over whatever it sits on, which
+                    # then reads as a collision that PowerPoint will never show.
+                    img.paste(pic, (x, y), pic)
                 except Exception:
                     d.rectangle([x, y, x + w, y + h], fill=(215, 215, 215),
                                 outline=(150, 150, 150))
@@ -372,6 +382,8 @@ def render(path, outdir, scale=120):
 
             if not sh.has_text_frame or not sh.text_frame.text.strip():
                 continue
+            if fill is None and slide_dark:
+                fill = bg
 
             tf = sh.text_frame
             bodyPr = tf._txBody.find(qn("a:bodyPr"))

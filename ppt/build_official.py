@@ -66,7 +66,7 @@ def shape_by_id(slide, shape_id):
     raise KeyError(f"shape {shape_id} not on slide")
 
 
-def set_text(shape, text):
+def set_text(shape, text, size_pt=None):
     """Replace a template shape's text without disturbing its formatting.
 
     The placeholders are not uniform: some have an empty leading paragraph, one
@@ -91,6 +91,10 @@ def set_text(shape, text):
     for r in runs[:-1]:
         r.text = ""
     runs[-1].text = text
+    if size_pt is not None:
+        # The template sizes this title for a one-word project name. Ours is a
+        # sentence, and at 36 pt it runs under the SIH logo in the corner.
+        runs[-1].font.size = Pt(size_pt)
     # A line break the template put in front of a one-word title costs a whole
     # line, and a longer title then overflows its box onto the content below.
     for br in tf._txBody.findall(f".//{qn('a:br')}"):
@@ -376,9 +380,18 @@ def build():
     bench = json.loads(BENCH.read_text())
     ours = bench["summary"]["sarathi"]
     base = bench["summary"]["baseline"]
+    hit = [r for r in bench["rows"]
+           if r["controller"] == "sarathi" and r["collision"]]
+    # A contact with the vehicle stopped, struck by someone else, is a different
+    # failure from one we drove into - and saying which is which is the
+    # difference between reporting a result and excusing one.
+    struck = [r for r in hit if r.get("ego_speed_at_impact", 1.0) < 0.5]
     seeds = len(bench["seeds"])
     scen = ours["scenarios"]
     p95 = ours["worst_p95_ms"]
+    p95_by_scenario = sorted(v["p95_ms"] for v in ours["by_scenario"].values())
+    p95_median = p95_by_scenario[len(p95_by_scenario) // 2]
+    within = sum(1 for v in p95_by_scenario if v <= 50.0)
     best = sorted(ours["by_scenario"].items(),
                   key=lambda kv: -kv[1]["mean_progress"])
 
@@ -388,6 +401,13 @@ def build():
 
     # ------------------------------------------------------------- 1. title
     set_text(shape_by_id(s1, 4), "SARATHI")
+    # The template ships a black SIH 2022 logo in the middle of its title page.
+    # The space is better spent showing the thing we built.
+    drop(s1, 5)
+    picture(s1, "fig-console-bev.png", 7.05, 2.30, 5.85, max_h=3.05)
+    caption(s1, 7.05, 5.55, 5.85,
+            "The planner's own view: drivable corridor, risk field, and the "
+            "trajectory it chose — computed live, twenty times a second.")
     write(shape_by_id(s1, 10).text_frame, [
         ("Problem Statement ID – SIH26037", "k"),
         ("Problem Statement Title – Adaptive Path Planning and Collision "
@@ -399,7 +419,7 @@ def build():
     ], base=17.0)
 
     # --------------------------------------------------- 2. idea / solution
-    set_text(shape_by_id(s2, 15361), "SARATHI — PLANNING WITHOUT LANES")
+    set_text(shape_by_id(s2, 15361), "SARATHI — PLANNING WITHOUT LANES", 29)
     set_team_chip(s2)
     drop(s2, 15362)
     box(s2, 0.42, 1.22, 6.15, 5.55, [
@@ -423,9 +443,10 @@ def build():
         ("An RSS safety supervisor recalibrated to Indian gap acceptance; it "
          "is monotone by construction, so it can only ever slow us down", "b"),
     ], base=12.5)
-    picture(s2, "fig-bev.png", 6.85, 1.30, 6.05, max_h=2.70)
+    picture(s2, "fig-night-bev.png", 6.85, 1.30, 6.05, max_h=2.70)
     caption(s2, 6.85, 4.12, 6.05,
-            "Risk field (red), the candidate fan (grey), the chosen path (amber).")
+            "Night, degraded sensing, a rider coming the wrong way: risk field "
+            "in red, its predicted path in blue, our chosen line in amber.")
     two_column_table(s2, 6.85, 4.62, 6.05, 2.10,
                      ("A conventional stack uses", "SARATHI uses instead"),
                      [("Lane centreline", "Drivable corridor, re-solved each tick"),
@@ -461,7 +482,8 @@ def build():
     caption(s3, 6.72, 5.52, 6.15,
             "Mission Control — every value on screen is computed live, not replayed.")
     card(s3, 6.72, 5.95, 1.94, 0.78, "20 Hz", "closed loop, no GPU")
-    card(s3, 8.83, 5.95, 1.94, 0.78, f"{p95:.0f} ms", "worst 95th %ile replan")
+    card(s3, 8.83, 5.95, 1.94, 0.78, f"{p95_median:.0f} ms",
+         "median 95th %ile replan")
     card(s3, 10.93, 5.95, 1.94, 0.78, "12", "road-user classes")
 
     # ------------------------------------------------ 4. feasibility, viability
@@ -478,7 +500,12 @@ def build():
         ("Built on the sponsor's own toolchain, and reproducible: every number "
          "on this slide comes out of a committed script", "b"),
     ], base=12.0)
-    panel(s4, 0.42, 4.62, 5.55, 2.15, [
+    still = ([("What is still wrong", "h"),
+              (f"{len(hit)} of {ours['runs']} runs end in contact"
+               + (f"; in {len(struck)} of those we were stationary and were "
+                  "struck. The rest are ours to fix." if struck else "."), "n")]
+             if hit else [])
+    panel(s4, 0.42, 4.42, 5.55, 2.38, still + [
         ("Challenges, and what we do about them", "h"),
         ("Caution in dense traffic — measured every run, and every threshold "
          "is exposed live so behaviour can be tuned and defended", "s"),
@@ -490,13 +517,16 @@ def build():
     caption(s4, 6.20, 5.72, 6.70,
             f"Mean route progress. {seeds} seeds × {scen} scenarios per "
             f"controller, identical seeds and identical sensor noise.")
-    card(s4, 6.15, 6.10, 2.15, 0.72,
-         f"{ours['collision_free']}/{ours['runs']}", "runs collision-free (ours)")
-    card(s4, 8.45, 6.10, 2.15, 0.72,
-         f"{base['collision_free']}/{base['runs']}", "runs collision-free (baseline)")
-    card(s4, 10.75, 6.10, 2.15, 0.72,
-         f"{ours['mean_progress'] / max(base['mean_progress'], 1e-6):.1f}×",
-         "the baseline's route progress")
+    card(s4, 6.15, 6.02, 2.15, 0.82,
+         f"{ours['collision_free']}/{ours['runs']}", "runs collision-free",
+         value_pt=24)
+    card(s4, 8.45, 6.02, 2.15, 0.82,
+         f"{ours['mean_progress'] * 100:.0f}%",
+         f"route progress; baseline {base['mean_progress'] * 100:.0f}%",
+         value_pt=24)
+    card(s4, 10.75, 6.02, 2.15, 0.82,
+         f"{p95_median:.0f} ms", f"median replan; {within}/{scen} under 50 ms",
+         value_pt=24)
 
     # ---------------------------------------------------- 5. impact, benefits
     set_team_chip(s5)
@@ -518,6 +548,15 @@ def build():
         ("Regulators and cities — safety margins that are measurable, "
          "reproducible and arguable, not a vendor's assertion", "b"),
     ], base=12.0)
+    panel(s5, 0.42, 5.00, 6.05, 1.75, [
+        ("What we can claim today, and no more", "h"),
+        (f"On identical seeds the vehicle covers "
+         f"{ours['mean_progress'] * 100:.0f}% of the route where a lane-following "
+         f"planner covers {base['mean_progress'] * 100:.0f}%, and it does so "
+         "without lane markings at all.", "n"),
+        ("The scenario library and the measurements are as much of the "
+         "contribution as the planner: anyone can re-run them.", "n"),
+    ], base=11.0)
     box(s5, 6.75, 1.15, 6.15, 3.05, [
         ("Benefits of the solution", "h"),
         ("Social — the risk field is explicitly harm-weighted, so a pedestrian "
@@ -529,8 +568,8 @@ def build():
         ("Educational — every threshold is exposed and adjustable, so the "
          "system can be interrogated rather than trusted", "b"),
     ], base=12.0)
-    picture(s5, "live-cow.png", 6.75, 3.55, 6.15, max_h=2.80)
-    caption(s5, 6.75, 6.42, 6.15,
+    picture(s5, "fig-bev.png", 6.75, 3.70, 6.15, max_h=2.40)
+    caption(s5, 6.75, 6.05, 6.15,
             "A judge drops a cow in front of the vehicle, mid-run. The planner "
             "has no foreknowledge of anything placed by hand.")
 
@@ -553,16 +592,25 @@ def build():
         ("Highway trajectory planning using a Frenet reference path", "b"),
         ("Motion planning in urban environments with a dynamic occupancy grid", "b"),
         ("RoadRunner scene and scenario authoring documentation", "b"),
+        ("What the research says we should do next", "h"),
+        ("Fit the prediction priors to IDD trajectories instead of building them "
+         "by hand, and put the closed loop in Simulink end to end", "b"),
     ], base=12.0)
     panel(s6, 6.75, 1.18, 6.15, 1.62, [
         ("Try it yourself — nothing here is scripted", "h"),
         ("github.com/Paragraph1148/automated-driving", "k"),
         ("uv run sarathi serve", "k"),
     ], base=12.5)
-    picture(s6, "drag.png", 6.95, 2.95, 5.75, max_h=3.55)
-    caption(s6, 6.75, 6.58, 6.15,
-            "Drag any road user with the mouse while the world runs — the "
-            "planner replans against wherever you leave it.")
+    picture(s6, "fig-thresholds.png", 6.85, 3.05, 2.05, max_h=2.75)
+    box(s6, 9.20, 3.00, 3.70, 2.90, [
+        ("What a judge can change, live", "h"),
+        ("Thirty-one thresholds, grouped: driving, caution, planner, safety", "b"),
+        ("Every one adjustable while the vehicle drives — no restart", "b"),
+        ("Ablations switch the risk field, the prediction or RSS off, so the "
+         "contribution of each is visible rather than asserted", "b"),
+    ], base=11.0)
+    caption(s6, 6.85, 5.90, 6.05,
+            "The thresholds panel, exactly as it appears in the running demo.")
     prs.save(OUT)
     print(f"wrote {OUT}: {len(prs.slides._sldIdLst)} slides "
           f"(bench: ours {ours['collision_free']}/{ours['runs']} collision-free, "

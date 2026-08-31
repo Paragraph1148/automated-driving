@@ -23,7 +23,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 
-def wait_for_state(page, behaviours, min_clearance, min_time, timeout):
+def wait_for_state(page, behaviours, min_clearance, min_time, timeout,
+                   min_speed=0.0):
     """Poll the console until the run looks the way we want to show it."""
     deadline = time.time() + timeout
     best = None
@@ -50,8 +51,13 @@ def wait_for_state(page, behaviours, min_clearance, min_time, timeout):
         except (TypeError, ValueError, IndexError):
             elapsed = 0.0
         name = (state["behaviour"] or "").strip().upper()
+        try:
+            speed = float(state["speed"])
+        except (TypeError, ValueError):
+            speed = 0.0
         ok = (elapsed >= min_time
               and clearance >= min_clearance
+              and speed >= min_speed
               and (not behaviours or name in behaviours)
               and str(state["latency"]).strip() not in ("", "—"))
         best = state | {"clearance": clearance, "elapsed": elapsed}
@@ -59,6 +65,42 @@ def wait_for_state(page, behaviours, min_clearance, min_time, timeout):
             return True, best
         time.sleep(0.25)
     return False, best
+
+
+def trim(path, pad=18, max_ar=2.2):
+    """Crop the uniform margin off a map capture.
+
+    The map pane is sized for a browser window, so a screenshot of it is mostly
+    empty road-coloured space. On a slide that empty space is the difference
+    between a figure you can read and a figure you cannot.
+    """
+    from PIL import Image, ImageChops
+    with Image.open(path) as im:
+        rgb = im.convert("RGB")
+        # The status chips live along the bottom edge and would otherwise pin the
+        # bounding box to the full height of a mostly empty pane.
+        body = rgb.crop((0, 0, rgb.width, int(rgb.height * 0.88)))
+        import numpy as np
+        bg = Image.new("RGB", body.size, body.getpixel((2, 2)))
+        mask = np.asarray(ImageChops.difference(body, bg).convert("L")) > 40
+        # A faint wash covers most of the pane, so a plain bounding box keeps
+        # nearly everything. Require a row or column to carry real ink.
+        rows = np.flatnonzero(mask.sum(axis=1) > mask.shape[1] * 0.008)
+        cols = np.flatnonzero(mask.sum(axis=0) > mask.shape[0] * 0.008)
+        if not len(rows) or not len(cols):
+            return
+        left, right = int(cols[0]), int(cols[-1])
+        top, bottom = int(rows[0]), int(rows[-1])
+        left, right = max(0, left - pad), min(rgb.width, right + pad)
+        top, bottom = max(0, top - pad), min(body.height, bottom + pad)
+        # The content is a road: a tight crop is a letterbox nobody can read on
+        # a slide. Give it back some sky until the shape is usable.
+        w, h = right - left, bottom - top
+        if max_ar and w / max(h, 1) > max_ar:
+            want = int(w / max_ar)
+            grow = (want - h) // 2
+            top, bottom = max(0, top - grow), min(rgb.height, bottom + grow)
+        rgb.crop((left, top, right, bottom)).save(path)
 
 
 def main():
@@ -69,6 +111,8 @@ def main():
     ap.add_argument("--port", type=int, default=8520)
     ap.add_argument("--behaviour", default="", help="comma-separated, any of them")
     ap.add_argument("--min-clearance", type=float, default=0.15)
+    ap.add_argument("--min-speed", type=float, default=0.0,
+                    help="only shoot while actually moving this fast, m/s")
     ap.add_argument("--min-time", type=float, default=6.0)
     ap.add_argument("--timeout", type=float, default=90.0)
     ap.add_argument("--width", type=int, default=1600)
@@ -81,6 +125,8 @@ def main():
                     help="palette class to drop before shooting, e.g. COW")
     ap.add_argument("--place-at", default="0.62,0.5",
                     help="where on the map to drop it, as fractions of the stage")
+    ap.add_argument("--element", default="",
+                    help="CSS selector to shoot instead of the whole page")
     ap.add_argument("--stage-only", action="store_true",
                     help="also write a <name>-bev.png cropped to the map")
     ap.add_argument("-o", "--out", default="artifacts/capture.png")
@@ -112,7 +158,8 @@ def main():
             page.goto(f"http://127.0.0.1:{args.port}/", wait_until="networkidle")
             wants = {b.strip().upper() for b in args.behaviour.split(",") if b.strip()}
             ok, state = wait_for_state(page, wants, args.min_clearance,
-                                       args.min_time, args.timeout)
+                                       args.min_time, args.timeout,
+                                       args.min_speed)
             if args.place:
                 # Do exactly what a judge does: pick the class, click the road.
                 page.click(f"#palette >> text={args.place.upper()}")
@@ -124,11 +171,19 @@ def main():
                 page.wait_for_timeout(1200)
             out = REPO / args.out
             out.parent.mkdir(parents=True, exist_ok=True)
-            page.screenshot(path=str(out))
+            if args.element:
+                el = page.query_selector(args.element)
+                if el is None:
+                    raise SystemExit(f"no element matches {args.element!r}")
+                el.screenshot(path=str(out))
+            else:
+                page.screenshot(path=str(out))
             if args.stage_only:
                 stage = page.query_selector("#stage")
                 if stage is not None:
-                    stage.screenshot(path=str(out.with_name(out.stem + "-bev.png")))
+                    bev = out.with_name(out.stem + "-bev.png")
+                    stage.screenshot(path=str(bev))
+                    trim(bev)
             browser.close()
         print(("captured " if ok else "TIMED OUT, captured anyway ") + str(out))
         print(f"  state: {state}")

@@ -22,6 +22,11 @@ const bench = JSON.parse(fs.readFileSync(BENCH, "utf8"));
 const OURS = bench.summary.sarathi;
 const BASE = bench.summary.baseline;
 const SEEDS = bench.seeds.length;
+const HIT = bench.rows.filter((r) => r.controller === "sarathi" && r.collision);
+const STRUCK = HIT.filter((r) => (r.ego_speed_at_impact ?? 1) < 0.5);
+const P95S = Object.values(OURS.by_scenario).map((v) => v.p95_ms).sort((a, b) => a - b);
+const P95_MED = P95S[Math.floor(P95S.length / 2)];
+const P95_OK = P95S.filter((v) => v <= 50).length;
 const pct = (x) => `${(x * 100).toFixed(0)}%`;
 
 // --- palette: the console's own colours, so the deck and the demo agree ------
@@ -171,7 +176,8 @@ function stat(s, o) {
     color: o.color || ASPHALT, align: o.align || "left", valign: "bottom",
   });
   s.addText(o.label, {
-    x: o.x, y: o.y + (o.h || 0.72), w: o.w, h: 0.5, isTextBox: true, margin: 0,
+    x: o.x, y: o.y + (o.h || 0.72), w: o.labelW || o.w, h: o.labelH || 0.5,
+    isTextBox: true, margin: 0,
     fontFace: "Arial", fontSize: 10.5, color: MUTED, align: o.align || "left",
   });
 }
@@ -246,7 +252,8 @@ const STAGES = ["SENSE", "FUSE", "PREDICT", "RISK FIELD", "CORRIDOR",
     x: M, y: 6.5, w: 9.5, h: 0.4, isTextBox: true, margin: 0,
     fontFace: "Arial", fontSize: 11, color: MUTED,
   });
-  s.addImage({ path: path.join(ART, "fig-bev.png"), x: 8.6, y: 2.0, w: 4.2, h: 1.91 });
+  s.addImage({ path: path.join(ART, "fig-night-bev.png"), x: 8.4, y: 2.1, w: 4.4,
+               h: 4.4 / 2.2 });
   s.addNotes("Open with: this deck is for us, not the judges. The submission deck "
     + "is the other file. Read this one end to end once, then drill slides 21-23.");
 }
@@ -256,15 +263,15 @@ const STAGES = ["SENSE", "FUSE", "PREDICT", "RISK FIELD", "CORRIDOR",
   const s = lightSlide("How to use this deck",
     "Twenty minutes end to end. Then everyone drills their own section.");
   card(s, { x: M, y: 1.6, w: 4.0, h: 2.2, title: "Presenting (O4, anyone)",
-    lines: [{ t: "Slides 3–6 are the pitch, in order.", bullet: true },
-            { t: "Slide 4 is the only slide you must know verbatim.", bullet: true },
-            { t: "Never present a number that is not on slide 20.", bullet: true }] });
+    lines: [{ t: "Slides 1–3 are the pitch, in order.", bullet: true },
+            { t: "Slide 1 is the only one you must know verbatim.", bullet: true },
+            { t: "Never present a number that is not on slide 17.", bullet: true }] });
   card(s, { x: M + 4.25, y: 1.6, w: 4.0, h: 2.2, title: "Driving the demo (B1, B2)",
-    lines: [{ t: "Slides 18–19: the runbook, click by click.", bullet: true },
+    lines: [{ t: "Slides 15–16: the console, then the runbook.", bullet: true },
             { t: "Rehearse the failure path, not just the happy one.", bullet: true },
             { t: "One person drives, one person narrates. Never both.", bullet: true }] });
   card(s, { x: M + 8.5, y: 1.6, w: 4.0, h: 2.2, title: "Everyone, without exception",
-    lines: [{ t: "Slides 21–22: the weaknesses and the Q&A drill.", bullet: true },
+    lines: [{ t: "Slides 18–19: the weaknesses and the Q&A drill.", bullet: true },
             { t: "If a judge asks and you do not know — say so, then say who does.", bullet: true },
             { t: "A confident wrong answer loses more marks than a gap.", bullet: true }] });
   card(s, { x: M, y: 4.1, w: 12.23, h: 2.3, fill: ASPHALT, titleColor: AMBER,
@@ -458,7 +465,12 @@ const STAGE_SLIDES = [
     right: { kind: "card", title: "The honest caveat",
       lines: ["Our priors are hand-built from observed Indian driving, not learned "
         + "from a trajectory dataset. Say that before a judge asks. Then say what we "
-        + "would do with data: fit the priors per class from IDD tracks."] },
+        + "would do with data: fit the priors per class from IDD tracks.",
+        "If a judge points at a prediction cone spilling off the carriageway: the "
+        + "mean path is propagated along the corridor, but the cone also draws the "
+        + "lateral uncertainty, and uncertainty is not confined to the road. That is "
+        + "deliberate — a pedestrian who steps off the verge is exactly the case we "
+        + "must not model away."] },
   },
   {
     code: "sarathi/planning/risk.py", owner: "B1",
@@ -522,11 +534,15 @@ const STAGE_SLIDES = [
       { t: "Batched in NumPy.", b: "Evaluating candidates one at a time cost 71 ms; batching brought the same work to 7.5 ms." },
       { t: "Infeasible is not the same as unsafe.", b: "Candidates that break curvature or acceleration limits are dropped before scoring; the count is on screen as 'feasible n/m'." },
     ],
-    right: { kind: "card", title: "Where we know it is weak",
-      lines: ["From a standstill the sampled terminal speeds are poorly matched to what "
-        + "2 m/s² can actually deliver over the sampled durations, so the fan is "
-        + "narrower than it should be exactly when we need it widest. That is a "
-        + "sampling problem, not a safety one, and it is the next thing we fix."] },
+    right: { kind: "card", title: "The sampling bug that cost us most",
+      lines: ["At a standstill, 81 of 131 candidates were rejected for exceeding the "
+        + "acceleration limit and 49 more for curvature — one usable trajectory left. "
+        + "Both were self-inflicted: we sampled terminal speeds the car cannot reach "
+        + "in the time given, and we advanced the lateral profile with the clock, so a "
+        + "stopped car was asked to move sideways before it had moved at all.",
+        "Fixed by sampling inside the reachable set (peak accel of the quartic is "
+        + "1.5·Δv/T) and advancing the lateral with distance travelled instead — "
+        + "Werling's own low-speed form. Usable fan: 1 → 35-50."] },
   },
   {
     code: "sarathi/safety/rss.py", owner: "B1",
@@ -566,7 +582,7 @@ STAGE_SLIDES.forEach((sp) => {
     bullets(s, sp.left, { x: M, y: 2.15, w: 6.55, h: 3.4, fontSize: 13, gap: 10 });
     if (sp.right.kind === "image") {
       s.addImage({ path: path.join(ART, sp.right.file), x: 7.4, y: 2.15, w: 5.38,
-                   h: 5.38 / 2.2 });
+                   h: 5.38 / 2.8 });
       caption(s, 7.4, 4.68, 5.38, sp.right.caption);
       card(s, { x: 7.4, y: 5.05, w: 5.38, h: 0.7, fill: WASH, fontSize: 11,
                 lines: [sp.right.footer || ""], valign: "middle" });
@@ -603,7 +619,7 @@ STAGE_SLIDES.forEach((sp) => {
     lines: ["If our traffic were polite, our planner would look brilliant and mean "
       + "nothing. The scenarios are adversarial on purpose, and we should invite the "
       + "judge to make them worse."] });
-  s.addImage({ path: path.join(ART, "live-cow.png"), x: 7.75, y: 4.1, w: 5.03,
+  s.addImage({ path: path.join(ART, "fig-cow.png"), x: 7.75, y: 4.15, w: 5.03,
                h: 5.03 / 1.6 });
   caption(s, 7.75, 7.05, 5.03, "Cattle: high variance, low speed, no compliance.");
 }
@@ -648,7 +664,7 @@ STAGE_SLIDES.forEach((sp) => {
             "Progress · clean"], withProgress, {
     x: M, y: 1.5, w: 8.9, colW: [2.3, 0.85, 4.15, 1.6], fontSize: 10.5, rowH: 0.42 });
   caption(s, M, 6.3, 8.9, `Mean route progress and collision-free runs out of `
-    + `${SEEDS}, from the same campaign as slide 21.`);
+    + `${SEEDS}, from the same campaign as slide 17.`);
   card(s, { x: 9.7, y: 1.5, w: 3.08, h: 2.6, fill: WASH,
     title: "Five of these are ours, not theirs",
     lines: ["The problem statement names five situations. We added five harder ones "
@@ -675,7 +691,12 @@ STAGE_SLIDES.forEach((sp) => {
     { t: "Ablations", b: "switch off the risk field, the prediction or RSS and watch it degrade" },
     { t: "Chips, bottom left", b: "tracked objects, feasible candidates, margin relief, safety cap" },
   ];
-  bullets(s, items, { x: 8.7, y: 1.5, w: 4.1, fontSize: 11, gap: 8 });
+  bullets(s, items, { x: 8.7, y: 1.5, w: 4.1, h: 3.2, fontSize: 11, gap: 8 });
+  card(s, { x: 8.7, y: 4.95, w: 4.1, fill: WASH, autoH: true, fontSize: 11,
+    title: "Point at these, in this order",
+    lines: ["The behaviour card, so they know the machine has states. Then path "
+      + "clearance, so they know it is measuring, not guessing. Then hand over the "
+      + "mouse before they ask whether any of it is real."] });
   caption(s, M, 6.25, 7.9,
     "The whole interface is one HTML file served by the same process that runs the "
     + "simulation — nothing to install, nothing to build.");
@@ -755,8 +776,10 @@ STAGE_SLIDES.forEach((sp) => {
     label: "mean route progress" });
   stat(s, { x: 10.7, y: 3.15, w: 2.1, value: pct(BASE.mean_progress),
     label: "baseline, same seeds", color: MUTED });
-  stat(s, { x: 8.5, y: 4.60, w: 2.1, value: `${OURS.worst_p95_ms.toFixed(0)} ms`,
-    label: "worst 95th %ile replan" });
+  stat(s, { x: 8.5, y: 4.60, w: 2.1, labelW: 4.28, labelH: 0.85,
+    value: `${P95_MED.toFixed(0)} ms`,
+    label: `median scenario replan; ${P95_OK} of 10 under 50 ms, worst `
+      + `${OURS.worst_p95_ms.toFixed(0)} ms in the dense market` });
   stat(s, { x: 10.7, y: 4.60, w: 2.1, value: "20 Hz", label: "closed loop, no GPU" });
   card(s, { x: 8.5, y: 5.80, w: 4.28, h: 1.25, fill: WASH,
     title: "Rule for all of us",
@@ -770,7 +793,7 @@ STAGE_SLIDES.forEach((sp) => {
     "Volunteered limitations read as rigour. Discovered ones read as spin.", 18);
   bullets(s, [
     { t: "It is too cautious in dense traffic.", b: `Mean route progress across all runs is ${pct(OURS.mean_progress)}. On the hardest scenarios the vehicle spends much of the run stopped. We know why: from a standstill the sampled terminal speeds do not match what the acceleration limit can deliver over the sampled horizons, so the candidate fan is too narrow exactly when it needs to be wide.` },
-    { t: `Not every run is collision-free: ${OURS.collision_free} of ${OURS.runs}.`, b: "The failures cluster in the scenarios with the most vulnerable road users. We report them rather than dropping those scenarios." },
+    { t: `Not every run is collision-free: ${OURS.collision_free} of ${OURS.runs}.`, b: `Of the ${HIT.length} contacts, ${STRUCK.length} happened with the vehicle stationary and another road user driving into it; the rest we drove into and they are ours to fix. We report the split rather than the flattering half.` },
     { t: "Prediction priors are hand-built,", b: "not fitted to data. Defensible, but it is the first thing a research judge will push on." },
     { t: "The MATLAB port is a two-tier design.", b: "Full toolchain where licensed, base products otherwise. Be straight about which tier we are demonstrating." },
   ], { x: M, y: 1.55, w: 7.5, h: 3.4, fontSize: 12.5, gap: 10 });
@@ -783,14 +806,14 @@ STAGE_SLIDES.forEach((sp) => {
       + "right now, and the fix is a sampling change, not a rewrite.”"] });
   card(s, { x: 8.35, y: 1.55, w: 4.43, h: 3.4, fill: ASPHALT, color: "E6E8EC",
     titleColor: AMBER, title: "The bug worth telling them about",
-    lines: ["Our risk kernels used to rotate wildly around stationary vehicles. The "
-      + "predicted heading came from the gradient of a path that was barely moving — "
-      + "so it was noise. A bus sitting at 4° was being modelled at −94°, then −180°, "
-      + "then +58°.",
-      "Fix: trust measured heading only above 1 m/s, hold the last good estimate below "
-      + "it, and fall back to the road heading for anything that has never moved.",
-      "Result: bus-stop progress 41% → 56%, and two collisions went away. It is a good "
-      + "story because it shows we debug by measuring, not by tuning."] });
+    lines: ["The vehicle would not pull away from a stopped bus. Rather than tune the "
+      + "thresholds, we counted why each candidate trajectory was thrown away: at a "
+      + "standstill, 81 of 131 failed the acceleration limit and 49 failed curvature. "
+      + "One survived.",
+      "Both were our own doing — we were sampling terminal speeds the car cannot reach, "
+      + "and moving the lateral profile on the clock rather than on distance travelled.",
+      "Say this one out loud. It shows we debug by measuring, which is the thing most "
+      + "hackathon teams cannot demonstrate."] });
   card(s, { x: 8.35, y: 5.15, w: 4.43, h: 1.5, fill: "FBEEE9", titleColor: RED,
     title: "Never say",
     lines: [{ t: "“It always works.”", bullet: true },
@@ -814,7 +837,7 @@ STAGE_SLIDES.forEach((sp) => {
     ["RSS assumes others follow RSS.",
      "We use it as a bound on our own behaviour; theirs is handled by worst-plausible-case prediction."],
     ["Why does it stop so often?",
-     "It is too cautious, we can measure exactly how much, and we know the sampling cause — slide 21."],
+     "It was, badly; we found the sampling cause by counting rejected candidates — slide 12."],
     ["Would this run on a real vehicle?",
      "20 Hz on a laptop CPU with no GPU; the gap to a vehicle is sensors and integration, not compute."],
     ["What is Indian about it, specifically?",
@@ -844,7 +867,7 @@ STAGE_SLIDES.forEach((sp) => {
 
 // ============================================================ roles
 {
-  const s = lightSlide("Who owns what, and when it is due",
+  const s = lightSlide("Who owns what — and what they hand in",
     "There are no fillers. Roughly half the marked deliverable is not planning code.", 20);
   table(s, ["Who", "Role", "Owns", "Codes?"], [
     ["B1", "Planning lead", "planning/, safety/, the lattice and the supervisor", "Yes"],
@@ -854,6 +877,12 @@ STAGE_SLIDES.forEach((sp) => {
     ["O3", "Data + evidence", "IDD taxonomy, the benchmark campaign, every table and plot", "Scripts"],
     ["O4", "Narrative", "Report, decks, video, and the pitch itself", "No"],
   ], { x: M, y: 1.55, w: 8.1, colW: [0.7, 1.9, 4.4, 1.1], fontSize: 10.5, rowH: 0.5 });
+  card(s, { x: M, y: 5.05, w: 8.1, fill: WASH, autoH: true, fontSize: 11.5,
+    title: "The hand-ins, not the job titles",
+    lines: [{ t: "O1 — two RoadRunner scenes, exported and committed, plus a licence-status note.", bullet: true },
+            { t: "O2 — ten scenario specs, and the stress variants of each.", bullet: true },
+            { t: "O3 — the benchmark campaign, and every table and plot in the report.", bullet: true },
+            { t: "O4 — the report, both decks, the video, and the three-minute pitch.", bullet: true }] });
   card(s, { x: 8.9, y: 1.55, w: 3.88, h: 2.5, fill: WASH,
     title: "Critical path",
     lines: [{ t: "O2's scenarios unblock B1, O1 and O3 — they come first.", bullet: true },
