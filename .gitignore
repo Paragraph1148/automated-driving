@@ -3,6 +3,11 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+# Installed npm packages for the deck and resume builders — never committed.
+node_modules/
+package-lock.json
+# The resume and its generated preview live on the feature branch, not here.
+resume/resume-preview.png
 artifacts/**/*.json
 artifacts/**/*.mp4
 artifacts/**/*.png
