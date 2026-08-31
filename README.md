@@ -48,11 +48,30 @@ uv run sarathi run all --chaos 0.7           # every scenario, harder
 uv run sarathi run all --controller baseline # the lane-following comparison
 uv run sarathi run market_dense_mixed --record run.json
 uv run sarathi replay run.json -o page.html  # shareable replay page
-uv run --extra dev pytest                    # 85 tests
+uv run --extra dev pytest                    # 88 tests
 ```
 
 `--chaos 0..1` is a single knob over the whole scene: wrong-way riders, driver
 aggression, cattle, barricades and lane-marking visibility all scale with it.
+
+### Reproducing every number we quote
+
+```bash
+uv run python scripts/benchmark.py --seeds 3      # -> artifacts/benchmark.json
+uv run python scripts/capture.py --scenario bus_stop_overtake \
+    --behaviour OVERTAKE --min-clearance 0.15 -o artifacts/fig-console.png
+```
+
+`benchmark.py` runs every scenario under both controllers across seeds, on
+identical seeds and identical sensor noise, and writes one JSON with a row per
+run. Both presentation decks in `ppt/` read that file and fail to build without
+it, so a figure on a slide cannot drift away from what the code does. A run that
+ends in contact records our own speed and the bearing of the other body, which
+separates a collision we drove into from one where we were stationary and were
+struck.
+
+`capture.py` starts the real server, drives a real browser, and waits until the
+telemetry satisfies a condition you give it before it takes the screenshot.
 
 ---
 
