@@ -494,7 +494,7 @@ def build():
         ("One command from a clean clone: uv run sarathi serve", "b"),
         (f"{scen} scenarios — the five the problem statement names, plus five "
          "harder ones we added", "b"),
-        ("Automated tests, including behavioural regressions, run in CI", "b"),
+        ("88 automated tests, including behavioural regressions", "b"),
         ("20 Hz closed loop on an ordinary laptop; no GPU, no cloud", "b"),
         ("Viability", "h"),
         ("Built on the sponsor's own toolchain, and reproducible: every number "
