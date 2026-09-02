@@ -122,6 +122,12 @@ world stepping with nobody connected and restarts the route when the vehicle
 finishes it. The instance stays busy because the demo is actually running, and
 the first visitor arrives at a scene already in motion rather than a still one.
 
+Choose **Canonical Ubuntu 24.04 LTS** for the image, not the newest release on
+the list: Caddy's apt repository is keyed on the distribution codename and lags
+a new Ubuntu by months, and "Minimal" variants omit tooling the script expects.
+The instance needs a **public IPv4 address** — the wizard will happily create one
+without, and then nothing can reach it, SSH included.
+
 ```bash
 scp deploy/setup-oracle.sh ubuntu@<ip>:
 ssh ubuntu@<ip> 'sudo bash setup-oracle.sh demo.example.org'

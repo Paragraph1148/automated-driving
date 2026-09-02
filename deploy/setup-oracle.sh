@@ -67,11 +67,34 @@ systemctl restart sarathi
 
 echo "==> caddy"
 if ! command -v caddy &>/dev/null; then
+  # Caddy's apt repository is keyed on the distribution codename, so a very
+  # recently released Ubuntu can be missing from it for months. Do not let that
+  # fail three steps later as an unexplained apt error.
   curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
     | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
     | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-  apt-get update -qq && apt-get install -y -qq caddy
+  if ! { apt-get update -qq && apt-get install -y -qq caddy; }; then
+    CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME:-unknown}")"
+    rm -f /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update -qq || true
+    cat >&2 <<EOF
+
+  Caddy has no package for this release ($CODENAME).
+
+  The demo itself is installed and running on 127.0.0.1:8420 — only the TLS
+  proxy in front of it is missing. Two ways forward:
+
+    - Recreate the instance on Ubuntu 24.04 LTS, which the repository covers,
+      and re-run this script. Cheapest if you have not configured anything yet.
+    - Or skip Caddy and expose the demo through a Cloudflare tunnel instead:
+        sudo snap install cloudflared   # or fetch the arm64 binary
+        cloudflared tunnel --url http://localhost:8420
+      That also removes the need for the VCN ingress rule below.
+
+EOF
+    exit 1
+  fi
 fi
 # {$DOMAIN} with no domain becomes :80 — plain HTTP, no certificate attempted.
 cat >/etc/caddy/Caddyfile <<EOF
@@ -94,6 +117,8 @@ for p in 80 443; do
     || iptables -I INPUT 5 -p tcp --dport "$p" -j ACCEPT
 done
 apt-get install -y -qq iptables-persistent >/dev/null 2>&1 || true
+# The fallback writes into /etc/iptables, which a Minimal image may not have.
+mkdir -p /etc/iptables
 netfilter-persistent save >/dev/null 2>&1 || iptables-save >/etc/iptables/rules.v4
 
 cat <<EOF
