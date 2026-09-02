@@ -1,0 +1,42 @@
+# /etc/systemd/system/sarathi.service
+#
+#   sudo cp deploy/sarathi.service /etc/systemd/system/
+#   sudo systemctl enable --now sarathi
+#
+# Runs the demo on the loopback only; Caddy in front of it terminates TLS and is
+# the only thing listening on a public port.
+[Unit]
+Description=SARATHI live demo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sarathi
+Group=sarathi
+WorkingDirectory=/opt/sarathi
+Environment=PATH=/opt/sarathi/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/sarathi/.venv/bin/sarathi serve --host 127.0.0.1 --port 8420
+
+# A judge leaning on the demo should never take the box with it, and a crash
+# mid-demo should come back on its own.
+Restart=always
+RestartSec=2
+# One core is the entire budget for one world; the rest belong to the OS and
+# the proxy. Beyond that the scheduler throttles rather than the box thrashing.
+CPUQuota=140%
+MemoryMax=1G
+
+# Nothing here writes to disk, so nothing here needs to be able to.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

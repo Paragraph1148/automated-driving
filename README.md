@@ -59,6 +59,22 @@ in the submission — which is the point. A recorded video invites the question
 "how do we know it isn't a replay?"; someone who places the obstacle themselves
 has already answered it.
 
+### Putting it on the internet
+
+The page and the telemetry socket share one port, so there is one listener to
+expose and one certificate to terminate:
+
+```bash
+scp deploy/setup-oracle.sh ubuntu@<ip>:
+ssh ubuntu@<ip> 'sudo bash setup-oracle.sh demo.example.org'
+```
+
+That is a free Oracle Ampere VM, TLS included. One simulation is broadcast to
+everyone connected, so a world costs most of a CPU core and a spectator costs
+128 KiB/s and nothing else — which is what decides the host.
+**[docs/05-hosting.md](docs/05-hosting.md)** has the measurements, the Docker and
+Hugging Face routes, and why a serverless runtime cannot do this.
+
 ---
 
 ## Every command
@@ -67,12 +83,14 @@ has already answered it.
 uv run sarathi list                            # the ten scenarios
 uv run sarathi serve                           # live interactive demo
 uv run sarathi serve --scenario market_dense_mixed --port 9000
+uv run sarathi serve --host 0.0.0.0            # reachable from off the machine
 uv run sarathi run village_road_unmarked       # one headless run
 uv run sarathi run all --chaos 0.7             # every scenario, harder
 uv run sarathi run all --controller baseline   # the lane-following comparison
 uv run sarathi run market_dense_mixed --record run.json
 uv run sarathi replay run.json -o page.html    # shareable replay page
-uv run --extra dev pytest                      # 88 tests
+uv run --extra dev pytest                      # 97 tests
+uv run python scripts/hostcheck.py             # can this box hold 20 Hz?
 ```
 
 `--chaos 0..1` is a single knob over the whole scene: wrong-way riders, driver
@@ -207,9 +225,12 @@ sarathi/          the stack — runs anywhere, no licence required
   assets/        the Mission Control viewer (one HTML file)
   serve.py       live interactive server
 scenarios/       *.yaml — one spec per scenario, shipped inside the package
-scripts/         benchmark.py (the evidence), capture.py (the figures)
-tests/           88 tests, including behavioural regressions
-docs/            architecture, problem statement, team plan, MATLAB bridge
+scripts/         benchmark.py (the evidence), capture.py (the figures),
+                 hostcheck.py (can this machine hold 20 Hz?)
+tests/           97 tests, including behavioural regressions
+docs/            architecture, problem statement, team plan, MATLAB bridge,
+                 hosting
+deploy/          Dockerfile, compose, Caddyfile, systemd unit, Oracle setup
 ppt/             the SIH idea submission deck and the internal briefing
 artifacts/       benchmark.json and the figures the decks embed
 ```

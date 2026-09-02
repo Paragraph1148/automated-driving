@@ -1,0 +1,14 @@
+# Caddy gets the certificate itself, renews it itself, and needs no WebSocket
+# configuration: it proxies the Upgrade through by default. That is the whole
+# reason the demo now serves the page and the socket on one port — there is no
+# second hostname to name here and no second certificate to renew.
+{$DOMAIN} {
+	encode zstd gzip
+
+	# The telemetry frames are ~13 KiB of JSON ten times a second and the
+	# connection is open for as long as someone is watching, so the proxy must
+	# not decide the stream has stalled and cut it.
+	reverse_proxy sarathi:8420 {
+		flush_interval -1
+	}
+}

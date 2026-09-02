@@ -653,9 +653,17 @@ function startLive(){
   });
 
   const status = document.getElementById("live-status");
-  const url = `ws://${location.hostname}:${Number(location.port||8420)+1}`;
+  // Same origin, same port, upgraded at /ws. Deriving the scheme from the page
+  // rather than hardcoding ws:// is what lets this run behind TLS at all: an
+  // https page is forbidden from opening a plaintext ws:// socket, so a
+  // hardcoded scheme fails as mixed content the moment the demo leaves
+  // localhost. file:// has no origin to borrow, so fall back to the dev port.
+  const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = location.host ? `${wsProto}//${location.host}/ws`
+                            : "ws://localhost:8420/ws";
   ws = new WebSocket(url);
-  ws.addEventListener("open", () => { status.textContent = "live"; });
+  ws.addEventListener("open", () => {
+    status.textContent = "live"; status.style.color = ""; });
   ws.addEventListener("close", () => {
     status.textContent = "disconnected"; status.style.color = "var(--crit)"; });
   ws.addEventListener("error", () => {
@@ -698,6 +706,8 @@ function startLive(){
     lastFrame = msg; frames = [msg]; idx = 0;
     heldIds = msg.held || [];
     document.getElementById("live-clock").textContent = `${msg.t.toFixed(1)} s`;
+    // Everyone shares one world, so say so when somebody else is in it.
+    status.textContent = msg.viewers > 1 ? `live · ${msg.viewers} watching` : "live";
     document.getElementById("m-outcome").textContent = "running";
     draw();
   });
