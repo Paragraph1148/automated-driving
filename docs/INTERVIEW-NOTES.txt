@@ -1,0 +1,1455 @@
+================================================================================
+SARATHI - BUILD & DEVELOPMENT NOTES
+Everything learned, everything that broke, and how to defend it in an interview
+================================================================================
+
+Project : SARATHI - adaptive path planning and collision avoidance for
+          autonomous vehicles on unstructured Indian roads
+Context : Smart India Hackathon 2026, problem statement SIH26037 (MathWorks)
+Repo    : github.com/Paragraph1148/automated-driving  (branch: main)
+Size    : ~6,600 lines of Python in sarathi/, 760 lines of tests, one 788-line
+          HTML viewer, 10 scenario files
+Runtime : 20 Hz closed loop on a laptop CPU. No GPU. No cloud. No MATLAB licence.
+
+--------------------------------------------------------------------------------
+HOW TO USE THIS FILE
+--------------------------------------------------------------------------------
+Read PART 1 and PART 3 until you can say them without looking. Those two answer
+"what did you build" and "why is it interesting".
+
+Read PART 6 (the bugs) twice. In an interview, bugs are worth more than
+features. Anyone can list features. Only someone who actually built the thing
+can tell you what broke, how they found it, and what the fix taught them.
+
+PART 12 is a question bank with answers. Practise saying them out loud.
+
+Every section has three layers:
+  [KID]  - the explanation you would give a ten-year-old
+  [REAL] - the engineering explanation
+  [CODE] - where it lives and what the code actually does
+
+
+================================================================================
+PART 1 - THE 60-SECOND ANSWER
+================================================================================
+
+"Every self-driving car software stack in the world plans inside a lane. It
+takes the lane centre line as its reference, and it treats the world as a grid
+of occupied and free cells. On an Indian road neither of those exists. There
+are no reliable lane markings, and the traffic is mixed - buses, autos,
+two-wheelers filtering through 40 cm gaps, pushcarts, pedestrians, cattle.
+
+So I removed both assumptions. Instead of a lane centre line, the planner
+solves for a 'drivable corridor' - a dynamic program over the free space ahead,
+recomputed twenty times a second. Instead of an occupancy grid, it builds a
+continuous risk field that knows what each road user *is*, how badly hitting it
+would hurt, and where it might be two seconds from now.
+
+Around that I built the whole loop: simulated camera, LiDAR and radar with
+noise, dropout and occlusion; Kalman tracking; multi-modal prediction; an
+eight-state behaviour machine; a jerk-minimal trajectory lattice; and an RSS
+safety supervisor that can only ever slow the vehicle down.
+
+It runs at 20 Hz on a laptop, and I measured it: ten scenarios, three seeds,
+against a conventional lane-following planner on identical seeds. It gets 43%
+of the way down the road where the baseline gets 36%, and it wins on eight of
+the ten scenarios. It is not yet safer by raw contact count, and I can tell you
+exactly why."
+
+That last sentence is the most important one in the whole answer. It signals
+you know your own numbers instead of selling them.
+
+
+================================================================================
+PART 2 - THE PROBLEM, AND WHY IT IS ACTUALLY HARD
+================================================================================
+
+[KID]
+Imagine you're walking through a really crowded market. Nobody walks in neat
+lines. There are cows, bikes squeezing past you, people crossing wherever they
+want, and holes in the road. Now imagine you had to write down *rules* for how
+to walk through it - so precise that a robot could follow them, and never bump
+into anyone. That's the problem.
+
+[REAL]
+The problem statement (SIH26037) names six things, and each is a scoring line:
+
+  1. Adaptive path planning     - the path changes as the scene changes
+  2. Collision avoidance        - with dynamic, unpredictable obstacles
+  3. Unstructured roads         - missing/unreliable markings, mixed traffic
+  4. Replanning latency         - they want a number, in milliseconds
+  5. Path smoothness            - jerk and curvature, not just "it didn't crash"
+  6. MathWorks toolchain        - MATLAB, Simulink, Stateflow, RoadRunner
+
+Why it is genuinely hard, and not just "add more sensors":
+
+  * Lane markings are not merely missing - they are sometimes WRONG. A planner
+    that trusts a faded marking is worse than one that ignores markings.
+  * Traffic is non-lane-based. Two vehicles can be side by side with 30 cm
+    between them and both consider that normal. Standard car-following models
+    (which assume a queue in a lane) produce nonsense here.
+  * The classes matter. Hitting a barricade and hitting a child are not the
+    same event, but a binary occupancy grid says they are.
+  * Behaviour is multi-modal. A two-wheeler beside you is either holding
+    station or about to filter into the gap in front of you. Those futures are
+    metres apart. Predicting the average of them is confidently wrong.
+  * There is no clean "right of way". At an unsignalled junction everyone
+    negotiates. A planner that waits for a guaranteed gap waits forever.
+
+INTERVIEW TIP: if you are asked "why not just use an existing stack" - the
+answer is that existing stacks are not badly tuned for India, they are
+structurally incompatible with it. Their core data structure (the lane) does
+not exist here.
+
+
+================================================================================
+PART 3 - THE ONE BIG IDEA
+================================================================================
+
+If you remember one thing, remember this table:
+
+  A conventional stack uses      | SARATHI uses instead
+  -------------------------------|--------------------------------------------
+  Lane centre line as the        | Drivable corridor - a dynamic program over
+  planning reference             | free space, re-solved every tick
+  -------------------------------|--------------------------------------------
+  Binary occupancy grid          | Risk field - continuous, class-conditioned,
+                                 | harm-weighted, indexed by time
+  -------------------------------|--------------------------------------------
+  One predicted path per object  | Multi-modal intent, covariance grows with
+                                 | time
+  -------------------------------|--------------------------------------------
+  Obstacles are walls            | A pothole is traversable cost; the verge is
+                                 | drivable
+  -------------------------------|--------------------------------------------
+  Lane-change state machine      | Eight behaviours, wrong-way evasion included
+  -------------------------------|--------------------------------------------
+  Fixed safety envelope          | RSS recalibrated to Indian gap acceptance
+
+THE SENTENCE:
+  "We did not add Indian conditions to a Western planner. We removed the
+   assumption the Western planner is built on."
+
+WHY THIS IS THE INTERESTING PART:
+A MathWorks judge knows the Frenet trajectory-planning example in the Automated
+Driving Toolbox by heart. If your answer sounds like that example, you are one
+of forty teams. That example has a lattice; it does not have a corridor solver
+or a risk field. Start your technical answer at the corridor and the risk
+field, not at the lattice.
+
+
+================================================================================
+PART 4 - THE PIPELINE, STAGE BY STAGE
+================================================================================
+
+Eight stages, executed in this order, twenty times a second (every 50 ms):
+
+  SENSE -> FUSE -> PREDICT -> RISK FIELD -> CORRIDOR -> BEHAVIOUR -> LATTICE
+        -> RSS + CBF
+
+Most interview questions are secretly "which stage handles that?". Learn the
+order and you can place any question.
+
+--------------------------------------------------------------------------------
+STAGE 1 - SENSE            sarathi/perception/sensors.py
+--------------------------------------------------------------------------------
+[KID]
+The car has three kinds of eyes, and all three are a bit broken in different
+ways. One can tell a cow from a motorbike but is bad at judging distance. One
+measures distance perfectly but has no idea what it's looking at. One is great
+at speed but can't tell left from right very well. And if a bus is in the way,
+none of them can see behind it.
+
+[REAL]
+Three sensor models, each with the failure mode that actually matters for that
+modality:
+
+  Camera - classifies objects (the only sensor that can), but misses small and
+           distant ones, and its position error grows with range.
+  LiDAR  - accurate geometry, NO class label, hard occlusion shadow.
+  Radar  - long range, direct range-rate (speed) measurement, poor lateral
+           resolution: it knows how far, not exactly where across.
+
+Noise is ANISOTROPIC - depth error and lateral error are different sizes. This
+matters: modelling both as one circle is the shortcut that makes a demo look
+better than the system is.
+
+Occlusion is geometric: each obstacle claims an angular interval as seen from
+the sensor, and anything behind it in that interval is simply not detected.
+
+[WHY IT MATTERS - say this in an interview]
+"The planner has no access to the simulator's ground truth. It sees tracks,
+with the errors a real detector makes. That is why the risk field has an
+uncertainty skirt at all - if we planned on ground truth, that skirt would be
+decoration."
+
+Planning on ground truth is the single most common way a student demo lies
+about its own capability.
+
+--------------------------------------------------------------------------------
+STAGE 2 - FUSE             sarathi/perception/fusion.py
+--------------------------------------------------------------------------------
+[KID]
+Three sets of broken eyes see the same cow and each reports something slightly
+different. This step decides "those three blobs are all one cow", remembers the
+cow between frames, and keeps a running opinion about whether it's a cow or a
+motorbike.
+
+[REAL]
+  * Constant-velocity KALMAN FILTER per track. State = position and velocity.
+    Predict forward, then correct with new detections.
+  * Data association by a GATED nearest neighbour: a detection can only update
+    a track if it lands within 3 sigma of the predicted position (gate clamped
+    between 1 m and 8 m).
+  * Track LIFECYCLE: a new detection creates a "tentative" track; 2 hits
+    confirm it; 12 consecutive misses delete it. In between it COASTS - keeps
+    predicting without measurements. Coasting is what lets the car keep braking
+    for a cow that just disappeared behind a bus.
+  * CLASS FUSION IN LOG-ODDS (see PART 5). Not averaging probabilities.
+
+[CODE - the log-odds bit, explained simply]
+Instead of storing "70% sure it's a cow", store a score. Every time the camera
+says "cow, 80% confident", add log(0.8/0.2) = +1.39 to the cow score and
+subtract a little from the others. To get probabilities back out, softmax the
+scores.
+
+Two reasons this is better than averaging:
+  1. Evidence ADDS. Ten weak sightings can add up to a strong belief.
+  2. Two confident, disagreeing observations do not average to "no idea".
+
+Scores are BOUNDED to +/-40 so that a belief built over a long run can still be
+corrected by contrary evidence. An unbounded belief at +500 is unfalsifiable.
+
+--------------------------------------------------------------------------------
+STAGE 3 - PREDICT          sarathi/prediction/intent.py
+--------------------------------------------------------------------------------
+[KID]
+For every person, bike or cow, guess what they'll do next. But don't guess just
+ONE thing - guess all the things they might do, and how likely each is. A cow
+might stand still, or wander left, or suddenly bolt. All three get drawn.
+
+[REAL]
+Six manoeuvre hypotheses per tracked object:
+
+  CONTINUE   - hold speed and lateral position
+  CUT_IN     - move laterally into our path
+  FILTER     - thread through a gap (two-wheelers, autos)
+  STOP       - decelerate to standstill
+  DART       - sudden large lateral movement (pedestrians, animals)
+  WRONG_WAY  - travelling against the corridor direction
+
+The prior probability of each is CLASS-CONDITIONED. A two-wheeler filters; a
+bus essentially never does. A pedestrian darts; a barricade never moves.
+
+Each hypothesis is propagated forward in the corridor's Frenet frame (so
+predicted paths follow the road, they don't fly off a curve), and carries a
+covariance that GROWS with time - because you know less about 3 seconds from
+now than about 0.5 seconds from now - and is CLAMPED to what the object can
+physically reach. A stationary car cannot be 1.8 m sideways in one second.
+
+[WHY MULTI-MODAL - the killer line]
+"Committing to the mean of two futures that are metres apart produces a
+prediction that is confidently wrong, which is worse than no prediction."
+
+[HONEST CAVEAT - say it before they ask]
+The priors are hand-built from observed Indian driving, not learned from a
+trajectory dataset. With data we would fit them per class from IDD (the India
+Driving Dataset from IIIT Hyderabad).
+
+--------------------------------------------------------------------------------
+STAGE 4 - THE RISK FIELD   sarathi/planning/risk.py   <- THE CENTREPIECE
+--------------------------------------------------------------------------------
+[KID]
+Instead of drawing a box around each thing and saying "don't go in the box",
+we paint the whole road with heat. Bright red where it's very dangerous, fading
+to nothing where it's safe. A cow paints a big fuzzy red cloud because we don't
+know what it'll do. A parked car paints a small sharp one. A child paints a
+brighter one than a lamp post, because hurting a child is worse. And we paint a
+separate picture for "now", "half a second from now", "one second from now",
+and so on.
+
+[REAL]
+Four ingredients:
+
+  1. PREDICTED OCCUPANCY, summed over every manoeuvre hypothesis weighted by
+     its probability. So the field IS the expected cost, not the cost of the
+     single most likely future.
+  2. CLASS-CONDITIONED ANISOTROPIC KERNELS. Not circles - ellipse-ish shapes
+     longer along the direction of travel than across it, sized by the object's
+     footprint plus its predicted uncertainty.
+  3. HARM WEIGHTING. Explicit table in the code:
+        pedestrian 1.00, bicycle 0.95, two-wheeler 0.92, cattle 0.80,
+        pushcart 0.78, auto 0.70, bus/truck 0.66, car 0.60,
+        parked vehicle 0.50, barricade 0.40
+     This is a deliberate ethical choice and you should say so out loud: an
+     unprotected road user costs the planner more than sheet metal.
+  4. TRAVERSABLE TERRAIN COST. Potholes raise cost without ever becoming
+     impassable, so the car crosses a pothole slowly instead of swerving into
+     oncoming traffic to avoid it.
+
+[THE KERNEL SHAPE - a genuinely good detail to know]
+Each kernel has a FLAT TOP and a GAUSSIAN SKIRT.
+
+  CORE  = the configuration-space footprint: the object's body + the ego's body
+          + a clearance margin. Inside it, risk is saturated (uniformly
+          maximal).
+  SKIRT = the prediction uncertainty. It controls how fast risk DECAYS outside
+          the core - not how big the core is.
+
+Why flat-topped? If the kernel peaked at the centre, there would be a spurious
+gradient pulling the planner *towards* the obstacle's centre from inside it.
+Flat means no gradient inside the core.
+
+Why keep core and skirt separate? Folding sigma into the core (the tempting
+shortcut) inflates a bus into a 3.6 m half-width wall four seconds out and
+closes roads that are in fact passable. We tried it. It closed roads.
+
+[TWO SEPARATE OUTPUTS - important]
+  agent_risk()  - a soft cost used to RANK trajectories.
+  penetration() - a hard geometric depth of intrusion used to FORBID them.
+
+The soft field must not be asked to forbid, because harm weighting means a
+near-miss with a pedestrian legitimately scores worse than a collision with a
+barricade - which is right for ranking and wrong for feasibility.
+
+--------------------------------------------------------------------------------
+STAGE 5 - THE CORRIDOR     sarathi/planning/corridor_path.py
+--------------------------------------------------------------------------------
+[KID]
+Draw an invisible line down the road showing where it's actually possible to
+drive - going around the parked truck, the barricade, the cow that's standing
+still. Not the painted line. The line that a good driver would take. Redraw it
+every time anything moves.
+
+[REAL]
+A DYNAMIC PROGRAM over a 2-D grid:
+  state  = (distance along the road s, lateral offset d)
+  grid   = 70 m ahead, 2.5 m longitudinal steps, 0.3 m lateral steps
+  cost   = blockage overlap (60) + corridor-edge proximity (25)
+           + keep-left preference (0.35) + lateral smoothness (5.0)
+  moves  = any lateral change per step whose rate is under the vehicle's
+           tracking limit; anything sharper is set to infinity
+
+Standard DP: forward pass accumulating minimum cost, backward pass recovering
+the chosen path. Vectorised in numpy - the whole transition matrix is one
+broadcast subtraction.
+
+Output is not just a line. It returns:
+  * the reference path (a smooth curve the lattice can plan in)
+  * a CLEARANCE profile (how much room there is)
+  * which SIDE is free
+The behaviour layer needs all three.
+
+[THE HARD CLAMP - a bug fix that became a design rule]
+The edge penalty is finite, so a heavy enough blockage could "buy its way" off
+the carriageway. Now the profile is hard-clamped inside the corridor bounds.
+Driving off the road is not a trade the planner may make.
+
+[THIS IS THE CENTRAL CLAIM]
+Because the reference is derived from free space, there is NO BRANCH ANYWHERE
+IN THE CODE for "lane markings missing". Markings, when present, are only a
+prior on the nominal offset - a weak preference, not a constraint.
+
+[LIKELY QUESTION] "Isn't your corridor just a lane you computed?"
+[ANSWER] "Yes - and that is the point. It is derived from free space every
+tick instead of read from paint. When a bus stops in it, the corridor bends
+around the bus. A lane cannot."
+
+--------------------------------------------------------------------------------
+STAGE 6 - BEHAVIOUR        sarathi/planning/behaviour.py
+--------------------------------------------------------------------------------
+[KID]
+Before deciding exactly where to steer, decide what you're TRYING to do. Am I
+cruising? Following someone? Squeezing past? Overtaking? Giving way? Crawling
+in a crowd? Getting out of the way of someone coming at me head-on? Stopping
+right now?
+
+[REAL] Eight states, evaluated as guards in strict priority order:
+
+  CRUISE           free road - hold the desired speed
+  FOLLOW           matched to a leader's speed and gap
+  NUDGE            squeezing past an obstruction, speed reduced
+  OVERTAKE         leader is slow and there is width to pass
+  YIELD            giving way at a junction or to a vulnerable road user
+  CREEP            dense traffic - walking pace, maximum alertness
+  WRONG_WAY_EVADE  a rider is coming head-on on our side
+  EMERGENCY_STOP   time-to-collision below threshold - stop now
+
+Every transition has a minimum DWELL TIME so the machine cannot chatter between
+neighbouring states on sensor noise.
+
+[WHY A SEPARATE LAYER AT ALL]
+The lattice answers "which trajectory?". This layer answers "what am I trying
+to do?". They must be separate because the same geometry means different
+things: a stationary object 20 m ahead is a FOLLOW problem if it's a bus at a
+stand, and an EVADE problem if it's a rider coming the wrong way.
+
+[THE MATHWORKS ANGLE - use this]
+The state set is deliberately small and explicitly enumerated because it maps
+1:1 onto a Stateflow chart, and a chart is only readable if the states are.
+That is the bridge to the MATLAB deliverable.
+
+--------------------------------------------------------------------------------
+STAGE 7 - THE LATTICE      sarathi/planning/lattice.py
+--------------------------------------------------------------------------------
+[KID]
+Draw a fan of a hundred possible paths the car could take in the next few
+seconds. Throw away the ones that are physically impossible (too sharp, too
+fast). Score every one that's left against the heat map, plus how comfortable
+it is. Drive the best one. Do it all again 50 milliseconds later.
+
+[REAL]
+  * Sample TERMINAL STATES, not controls: lateral offsets across the corridor,
+    terminal speeds, and manoeuvre durations (1.6, 2.6, 3.6 s).
+  * Connect current state to each terminal state with a JERK-MINIMAL
+    polynomial: quintic laterally (position boundary conditions), quartic
+    longitudinally (velocity boundary conditions). See PART 5.
+  * Reject candidates violating acceleration, braking, curvature or lateral
+    acceleration limits.
+  * Score survivors against the TIME-INDEXED risk field - each point of each
+    trajectory is evaluated at the time the car would actually be there - plus
+    jerk, curvature, offset from reference, and speed shortfall.
+  * Everything is BATCHED in numpy: all candidates evaluated as one array
+    operation, not in a Python loop.
+
+[THE COST FUNCTION - weights are on screen and adjustable]
+  w_risk 12.0, w_speed 2.4, w_offset 1.1, w_terminal_offset 2.0,
+  w_jerk_lat 0.14, w_jerk_long 0.10
+
+[SAFE-STOP FALLBACK]
+There is always one guaranteed-feasible candidate: a comfortable
+decelerate-to-stop. It is a LAST RESORT ONLY - it does not compete on cost.
+(It used to, and it won, and the car stopped a lot. See PART 6.)
+
+--------------------------------------------------------------------------------
+STAGE 8 - RSS + CONTROL BARRIER    sarathi/safety/rss.py
+--------------------------------------------------------------------------------
+[KID]
+After the car has picked its plan, one last checker looks at it and says "no,
+that's too fast for the gap you have" and slows it down. This checker can only
+ever slow the car down, never speed it up. So even if everything else has a bug,
+this layer cannot make the car more dangerous.
+
+[REAL]
+RSS (Responsibility-Sensitive Safety, from Mobileye) gives a formal minimum
+safe distance given both speeds, a response time, and braking limits:
+
+  d_safe = v_ego*rho + 0.5*a_max*rho^2       (distance covered while reacting)
+         + (v_ego + rho*a_max)^2 / (2*b_min) (our braking distance)
+         - v_front^2 / (2*b_front)           (credit for their braking)
+
+We INVERT this in closed form to get a safe SPEED directly, instead of
+proposing a speed and testing it. It is a quadratic in v_ego, so it's one
+sqrt - cheap enough to run against every tracked object every tick.
+
+There is a separate, harsher formula for OPPOSITE-direction traffic, where the
+closing speed is the SUM of the two speeds. This is why a wrong-way rider is so
+much more dangerous than a slow leader at the same range.
+
+Then a CONTROL BARRIER FUNCTION filter caps the commanded acceleration as the
+margin closes, with gain alpha = 1.5. Higher alpha is safer and jerkier.
+
+[THE INDIA CALIBRATION - the interesting part]
+  rho (response time)   0.6 s   (textbook highway RSS uses 0.75-1.0 s)
+  a_max during response 1.8 m/s^2
+  b_min (guaranteed)    3.6 m/s^2
+  b_max (emergency)     6.5 m/s^2
+  mu_lateral            0.25 m  (textbook uses 0.5 m or more)
+  VRU lateral bonus     +0.35 m
+  min_standoff          2.0 m
+
+Applied unmodified to a Delhi market street, textbook RSS demands gaps that do
+not exist, the filter saturates, and the vehicle never moves. That is not
+safety, it is paralysis.
+
+[min_standoff - a subtle one worth knowing]
+RSS alone permits creeping to within centimetres of a stopped vehicle, because
+at 0.09 m/s your stopping distance really is centimetres. Safe and useless: a
+car wedged 0.6 m behind a stopped bus cannot build the forward travel a lateral
+manoeuvre needs, so it can never pull out. Human drivers leave room precisely
+so they can pull out. So do we.
+
+[THE HARD QUESTION] "RSS assumes everyone else follows RSS. Nobody here does."
+[ANSWER] "Correct. We use RSS as a lower bound on OUR OWN behaviour, not as a
+prediction of theirs. Their behaviour is handled in the prediction stage, which
+assumes they will do the worst plausible thing."
+
+[THE PROPERTY THAT MATTERS]
+Monotone by construction: it can only reduce speed. That single property is why
+no tuning mistake upstream can make the vehicle more aggressive than this layer
+permits. Say the word "monotone" - it is the whole argument in one word.
+
+
+================================================================================
+PART 5 - THE MATHS YOU MUST BE ABLE TO SKETCH ON A WHITEBOARD
+================================================================================
+
+You do not need to derive these. You need to be able to draw them and say what
+they are for.
+
+--------------------------------------------------------------------------------
+5.1 THE FRENET FRAME
+--------------------------------------------------------------------------------
+[KID] Instead of saying "I'm at latitude X, longitude Y", say "I'm 40 metres
+along this road and 1.2 metres left of the middle". Much easier to think about.
+
+[REAL] Coordinates relative to a reference curve:
+  s = arc length along the curve (how far along the road)
+  d = signed lateral offset (positive to the LEFT of travel direction)
+
+Why: in (x, y) a road curve makes every equation messy. In (s, d), "stay in
+your lane" is just "keep d small", and "go faster" is just "increase s-dot".
+The road being curved disappears into the coordinate system.
+
+Conversion needs finding the closest point on the polyline. Naively that is a
+loop over every segment; we use a scipy cKDTree for nearest-neighbour lookup
+plus a local refinement. That change alone was a ~34x speed-up on the batch
+conversion, which mattered because we convert thousands of points per tick.
+
+Cost of the trick: near a sharp curve, when |d| is large, the mapping can
+become ill-conditioned. We keep d bounded by clamping to the corridor.
+
+--------------------------------------------------------------------------------
+5.2 JERK-MINIMAL POLYNOMIALS (quintic and quartic)
+--------------------------------------------------------------------------------
+[KID] If you want to move from here to there smoothly, without any sudden
+yanks, there is exactly one "smoothest possible" way to do it, and maths can
+write it down for you.
+
+[REAL] Jerk is the rate of change of acceleration - it is what passengers feel
+as a lurch. The trajectory that minimises integrated squared jerk between two
+fully specified states is a QUINTIC polynomial (5th order) in time.
+
+  LATERAL:      quintic. You specify start (d, d', d'') and end (d, d', d'').
+                Six constraints -> six coefficients.
+  LONGITUDINAL: quartic. You do NOT care where you end up along the road, only
+                how fast you are going. So you specify start (s, s', s'') and
+                end (s', s''). Five constraints -> five coefficients.
+
+Both reduce to a small linear solve: A c = b, 3x3 for the quintic and 2x2 for
+the quartic. That is literally what the code does (np.linalg.solve).
+
+This is the Werling formulation (Werling et al., ICRA 2010) - cite it by name.
+
+[THE DERIVATION YOU SHOULD KNOW - used to fix a real bug]
+For the quartic with zero initial acceleration, velocity is a cubic and
+ACCELERATION IS A PARABOLA peaking at the midpoint of the manoeuvre, with
+
+  peak acceleration = 1.5 * delta_v / T
+
+That means the reachable change in speed over duration T is bounded:
+
+  delta_v_max = (2/3) * a_max * T
+
+From a standstill with a_max = 2.0 m/s^2 and T = 1.6 s, the fastest terminal
+speed you can actually reach is 2.13 m/s. Sampling 3.0 m/s is not ambition, it
+is waste - the candidate is built, scored, and then thrown away. This closed
+form is what fixed the biggest bug in the project (PART 6, bug 12).
+
+--------------------------------------------------------------------------------
+5.3 DYNAMIC PROGRAMMING (the corridor solver)
+--------------------------------------------------------------------------------
+[KID] To find the best path through a grid, work out the best way to reach
+every square in the first column, then use that to work out the best way to
+reach every square in the second column, and so on. At the end, walk backwards
+to see which route won.
+
+[REAL] Classic shortest-path-on-a-DAG. Complexity O(n_s * n_d^2) - with 28
+longitudinal steps (70 m at 2.5 m) and a few tens of lateral cells (corridor
+width at 0.3 m), that is on the order of tens of thousands of transition
+evaluations, done as one vectorised numpy operation per column.
+
+Why DP and not A*? The state space here is a small regular grid with a natural
+ordering (you always move forward along s), so there is no need for a priority
+queue or a heuristic. DP is simpler, has no tie-breaking pathologies, and
+vectorises trivially.
+
+--------------------------------------------------------------------------------
+5.4 THE KALMAN FILTER
+--------------------------------------------------------------------------------
+[KID] You have a guess about where something is, and a new (slightly wrong)
+measurement. The Kalman filter is the rule for combining them: trust the
+measurement more when your guess is uncertain, trust your guess more when the
+measurement is noisy.
+
+[REAL] Two steps per frame:
+  PREDICT: push the state forward with the motion model (here: constant
+           velocity), and grow the uncertainty.
+  UPDATE:  blend prediction and measurement, weighted by the Kalman gain, and
+           shrink the uncertainty.
+
+Constant-velocity is a deliberate choice: it is the right model when you have
+no idea what the object intends. Intent is handled separately, in the
+prediction stage, precisely so the filter can stay simple.
+
+--------------------------------------------------------------------------------
+5.5 LOG-ODDS
+--------------------------------------------------------------------------------
+  logit(p) = log(p / (1 - p))
+
+Adding evidence in log space is multiplication in probability space, which is
+what Bayes' rule does. So accumulating evidence becomes ADDITION - cheap, order
+independent, and it never saturates at exactly 0 or 1.
+
+Recovering probabilities uses SOFTMAX via the log-sum-exp trick: subtract the
+maximum score before exponentiating, so exp() never overflows.
+
+--------------------------------------------------------------------------------
+5.6 IDM AND NLB-IDM (how the other traffic drives)
+--------------------------------------------------------------------------------
+[KID] A rule for how close a driver follows the car in front, and when they
+brake. The normal version assumes everyone is in a queue in a lane. Indian
+traffic isn't in lanes, so we changed the rule: how much you care about another
+vehicle depends on how much you two OVERLAP sideways, not on which lane you're
+in.
+
+[REAL] IDM (Intelligent Driver Model) is the standard car-following model:
+
+  accel = a * [ 1 - (v/v0)^delta - (s*(v, dv) / gap)^2 ]
+
+  where s*(v, dv) = s0 + v*T + v*dv / (2*sqrt(a*b))
+
+NLB-IDM (non-lane-based) changes ONE thing: the interaction is weighted by a
+SEPARATION RATIO w in [0, 1] that is 1 when two footprints overlap laterally
+and decays smoothly to 0 as the clear lateral gap grows past an "influence"
+width (itself a function of speed - a fast rider claims a wider pseudo-lane).
+
+On top of that:
+  * class-specific lateral clearance (a two-wheeler passes a bus with 0.4 m; a
+    car will not)
+  * GAP SEEKING - riders actively hunt for gaps rather than queueing. This is
+    what makes the market and bus-stop scenarios genuinely hard.
+
+This is not decoration. If the surrounding traffic were polite, our planner
+would look brilliant and mean nothing.
+
+--------------------------------------------------------------------------------
+5.7 CONTROL BARRIER FUNCTIONS (one paragraph version)
+--------------------------------------------------------------------------------
+Define a function h(x) that is positive when you are safe and zero at the
+boundary of the safe set. A CBF constrains the control input so that
+
+  h_dot(x, u) >= -alpha * h(x)
+
+In words: you may approach the boundary, but the closer you get the slower you
+are allowed to approach it. As h -> 0 the permitted rate -> 0, so you never
+cross. Here h is the RSS margin and u is acceleration; alpha = 1.5.
+
+
+================================================================================
+PART 6 - EVERY BUG WE HIT
+================================================================================
+This is the most valuable section in this file. In an interview, describing a
+bug you found by MEASURING - not by guessing - is worth more than any feature.
+
+Each entry: SYMPTOM -> HOW WE FOUND IT -> ROOT CAUSE -> FIX -> LESSON
+
+--------------------------------------------------------------------------------
+BUG 1 - TRAFFIC SPAWNED INSIDE THE EGO
+--------------------------------------------------------------------------------
+SYMPTOM  Runs occasionally started with a collision already in progress.
+CAUSE    Procedural traffic was placed by random sampling with no check against
+         already-placed bodies.
+FIX      Rejection sampling: keep a list of claimed footprints, resample (up to
+         16 attempts) until the new body is clear, and skip if the road is
+         genuinely full rather than forcing it. Also reserve the ego's
+         footprint PLUS the headway it needs - a scenario that starts the ego
+         1 m behind a stationary bus measures nothing.
+LESSON   The initial conditions are part of the experiment. A scenario that
+         starts broken tells you nothing about the planner.
+
+--------------------------------------------------------------------------------
+BUG 2 - TIME-TO-COLLISION SATURATED AT ZERO
+--------------------------------------------------------------------------------
+SYMPTOM  minTTC was 0.00 in almost every run, so the metric was useless.
+CAUSE    Collision checks used a single circumscribing disc per vehicle. For a
+         12 m bus that disc has a 6 m radius, so a two-wheeler 3 m to the side
+         "overlapped" it constantly.
+FIX      Multi-disc body decomposition: represent each vehicle as several
+         overlapping discs along its length.
+LESSON   A metric that is always at its extreme value is not a metric. Check
+         that your instrumentation actually varies before you trust it.
+
+--------------------------------------------------------------------------------
+BUG 3 - THE HANDCART CRABBED SIDEWAYS AT 53 DEGREES
+--------------------------------------------------------------------------------
+SYMPTOM  A pushcart moved diagonally across the road, body pointing one way and
+         travelling another. Looked absurd on screen.
+CAUSE    Pushcarts were in the HOLONOMIC class list (things that can move in
+         any direction without turning first, like pedestrians), and there was
+         no limit on how fast heading could change.
+FIX      Two changes: a heading slew-rate limit for all agents, and pushcart
+         removed from HOLONOMIC_CLASSES.
+LESSON   Physical plausibility is a spec, not a polish item. One visibly silly
+         agent makes a viewer distrust everything else on the screen.
+
+--------------------------------------------------------------------------------
+BUG 4 - A 10-DEGREE BUS BECAME A 360-DEGREE OCCLUDER
+--------------------------------------------------------------------------------
+SYMPTOM  Sometimes the car went completely blind for a few frames.
+CAUSE    Occlusion is computed as an angular interval [start, end] as seen from
+         the sensor. When that interval crossed the +/-pi wraparound, the
+         arithmetic produced an interval spanning the whole circle.
+FIX      Unwrap the bearings before comparing.
+LESSON   Every angle in a robotics codebase is a wraparound bug waiting to
+         happen. We have a wrap_to_pi() helper and it is used everywhere.
+
+--------------------------------------------------------------------------------
+BUG 5 - A BUS TRACK SWALLOWED TWO TWO-WHEELERS
+--------------------------------------------------------------------------------
+SYMPTOM  Two riders beside a bus vanished from the track list.
+CAUSE    The track-merge distance was scaled by the LARGER of the two vehicles.
+         Detections on one long bus do genuinely spread along its body, so the
+         merge radius has to be generous - but scaled by the bus, that radius
+         reached the riders next to it.
+FIX      Scale by the SMALLER vehicle, and require class agreement plus a
+         minimum number of hits before merging.
+LESSON   In mixed traffic, "reasonable for the biggest object" is
+         "catastrophic for the smallest". Always ask what a rule does at both
+         extremes of your class distribution.
+
+--------------------------------------------------------------------------------
+BUG 6 - TWO CERTAIN CLASSES TIED AT 50/50
+--------------------------------------------------------------------------------
+SYMPTOM  A confidently-classified object showed 0.5 confidence.
+CAUSE    Class log-odds were CLAMPED before the softmax. Two scores both pinned
+         at the clamp exponentiated to the same value.
+FIX      Log-sum-exp softmax (subtract the max first), and bound the log-odds
+         rather than clamping the exponent.
+LESSON   Numerical hygiene changes behaviour, not just precision. Know the
+         log-sum-exp trick; it comes up constantly.
+
+--------------------------------------------------------------------------------
+BUG 7 - A PARKED CAR WAS PREDICTED TO CUT IN 1.8 m
+--------------------------------------------------------------------------------
+SYMPTOM  Stationary vehicles generated large cut-in hypotheses, painting risk
+         across the road for no reason.
+CAUSE    Lateral displacement in a manoeuvre hypothesis was a function of TIME
+         only, not of how far the object would actually travel.
+FIX      Bound lateral displacement by forward travel using a slip ratio
+         (~tan 25 deg = 0.45 m sideways per metre forward), and treat anything
+         under 0.8 m/s as stationary.
+LESSON   Predictions must obey the same kinematics as the things they predict.
+         Otherwise you are inventing hazards.
+
+--------------------------------------------------------------------------------
+BUG 8 - FULL STEERING LOCK WHILE STOPPED
+--------------------------------------------------------------------------------
+SYMPTOM  The wheels snapped to full lock the moment the car stopped.
+CAUSE    Pure-pursuit look-ahead distance was computed as speed x time. At
+         v = 0 the look-ahead point is the car itself, so atan2(0, 0) - an
+         undefined angle.
+FIX      Look-ahead by DISTANCE with a floor, and fall back to the reference
+         path's own heading when there is no motion.
+LESSON   Every "multiply by speed" is a divide-by-zero at standstill in
+         disguise. Standstill is a boundary condition worth testing explicitly.
+
+--------------------------------------------------------------------------------
+BUG 9 - HEADING FROM atan2(d_dot, s_dot) BLEW UP AT STANDSTILL
+--------------------------------------------------------------------------------
+SYMPTOM  Candidate trajectories were rejected as un-driveable exactly when the
+         car was trying to pull away.
+CAUSE    Heading was computed in closed form from Frenet velocities. As s_dot
+         goes to zero the computed heading swings to +/-90 degrees off the
+         reference, apparent curvature explodes, and everything fails
+         feasibility.
+FIX      Take heading from the PATH GEOMETRY (finite differences of the lifted
+         world-frame points) and fall back to the reference heading when
+         displacement is below 1e-3.
+LESSON   Same lesson as bug 8, different formula. When you see a ratio, ask
+         what happens when the denominator is zero.
+
+--------------------------------------------------------------------------------
+BUG 10 - THE SAFE-STOP FALLBACK COMPETED ON COST AND WON
+--------------------------------------------------------------------------------
+SYMPTOM  The car stopped far more often than it needed to.
+CAUSE    The guaranteed-feasible "decelerate to stop" candidate was scored like
+         any other. It has zero risk and zero jerk, so on a crowded road it was
+         frequently the cheapest option.
+FIX      Make it a LAST RESORT only - used when no other candidate is feasible,
+         never entered into the cost comparison. Also normalised the speed cost
+         so that "not moving" is properly penalised.
+LESSON   A fallback that competes is not a fallback, it is a default. Keep
+         emergency behaviour out of the optimiser.
+
+--------------------------------------------------------------------------------
+BUG 11 - SELF-LOCKING SPEED FLOORS (gridlock)
+--------------------------------------------------------------------------------
+SYMPTOM  The car reached a state it could never leave.
+CAUSE    Several guards were phrased as "if speed is below X, do Y", where Y
+         kept speed below X. A closed loop with no exit.
+FIX      Gate those guards on ego_speed > 1.0 so they cannot trigger while
+         already stopped, and add follow_min_gap = 12.0 m so a leader matters
+         by distance and not only by time gap (a time gap at v = 0 is
+         meaningless).
+LESSON   Look for cycles in your state machine's guards. "Condition implies
+         action implies condition" is a deadlock.
+
+--------------------------------------------------------------------------------
+BUG 12 - THE BIG ONE: THE PLANNER COULD NOT PULL AWAY FROM A STOPPED BUS
+--------------------------------------------------------------------------------
+This is the bug to tell in an interview. Learn it properly.
+
+SYMPTOM  On the bus-stop and village-road scenarios the car would stop behind
+         an obstruction and sit there for the rest of the run - 60 seconds of
+         doing nothing. Behaviour said OVERTAKE. It never overtook.
+
+HOW WE FOUND IT
+         Not by tuning. The lattice already recorded, for every rejected
+         candidate, WHY it was rejected. We wrote a ten-line diagnostic that
+         printed a histogram of rejection reasons every two seconds:
+
+           t=16.1s v=0.00 n=107  curvature=74  longitudinal accel=32  OK=1
+
+         One usable trajectory out of 107. A "stuck" car is exactly what a
+         planner with one option looks like from the inside.
+
+ROOT CAUSE (two independent causes, both self-inflicted)
+
+  (a) UNREACHABLE TERMINAL SPEEDS - 81 of 131 rejected
+      We sampled terminal speeds without asking whether the vehicle could
+      reach them. For the jerk-minimal quartic, peak acceleration is
+      1.5*delta_v/T, so from a standstill over 1.6 s the reachable delta_v is
+      only (2/3)*2.0*1.6 = 2.13 m/s. Every sample above that was built,
+      scored, and thrown away by the feasibility check.
+
+  (b) LATERAL MOTION PARAMETERISED BY TIME - 49 of 131 rejected
+      The lateral polynomial advanced with the CLOCK. So a car at a standstill
+      was asked to translate sideways before it had moved forward at all.
+      Curvature is roughly (lateral acceleration)/v^2, so at v ~ 0 the implied
+      curvature is unbounded and every offset candidate fails.
+
+FIX
+  (a) reachable_speeds(v0, a0, T, cfg) - a closed-form bound; sample inside it.
+  (b) Advance the lateral profile by DISTANCE TRAVELLED instead of time. The
+      longitudinal profile already tells us how far along we are, so evaluate
+      the lateral polynomial at tau = T * (s(t) - s0) / total_travel. When the
+      car has not moved, tau stays at 0 and no lateral motion is demanded.
+      This is Werling's own low-speed formulation - the paper switches from
+      d(t) to d(s) below a speed threshold for exactly this reason.
+
+RESULT
+  Usable candidates at standstill: 1 -> 35-50.
+  Mean route progress across the campaign: 36% -> 43%.
+  Cattle crossing and bus stop went from crashing to clean.
+
+LESSON (say this one)
+  "The fix was not a threshold. Two of our own sampling assumptions were
+   generating candidates that were impossible by construction. We found it by
+   counting rejection reasons instead of tuning weights - and the moment we
+   had the histogram, the cause was obvious."
+
+--------------------------------------------------------------------------------
+BUG 13 - RISK KERNELS SPINNING AROUND STATIONARY VEHICLES
+--------------------------------------------------------------------------------
+SYMPTOM  The red collision zones drawn around parked vehicles rotated wildly,
+         frame to frame. The car refused to overtake a bus that was sitting
+         still, apparently believing it would hit it.
+HOW FOUND
+         Watching the live viewer, then instrumenting: we logged the predicted
+         heading for one stationary bus and compared it to its true heading of
+         4 degrees. Measured: -94 deg, then -180 deg, then +58 deg.
+ROOT CAUSE
+         Predicted heading came from np.gradient of the predicted path. For a
+         near-stationary object that path barely moves, so the gradient is
+         dominated by numerical noise. The "direction" was whichever way the
+         noise happened to point.
+FIX      Three parts:
+           * trust measured heading only above HEADING_TRUST_SPEED = 1.0 m/s
+           * hold the last good heading estimate below that
+           * fall back to the road heading for anything that has never moved
+RESULT   Bus-stop progress 41% -> 56%; two collisions disappeared.
+LESSON   Differentiating a noisy signal amplifies the noise. If you must
+         differentiate, gate it on the signal being large enough to differentiate.
+
+--------------------------------------------------------------------------------
+BUG 14 - TWO-WHEELERS FROZE BESIDE SLOWER VEHICLES
+--------------------------------------------------------------------------------
+SYMPTOM  Riders alongside a car simply stopped and never moved again.
+CAUSE    In NLB-IDM, when two bodies overlap LONGITUDINALLY but are laterally
+         clear, the geometric gap goes negative, the IDM interaction term
+         saturates, and the agent brakes at maximum for ever - even while the
+         other vehicle drives away.
+FIX      Skip the following term when the gap is negative AND the two are
+         laterally clear.
+LESSON   Car-following models assume the leader is AHEAD. In non-lane traffic
+         that assumption breaks constantly.
+
+--------------------------------------------------------------------------------
+BUG 15 - ...AND THE FIX FOR BUG 14 CAUSED A NEW ONE
+--------------------------------------------------------------------------------
+SYMPTOM  Traffic drove into the side of our stationary vehicle at 4 m/s. Three
+         of five contacts in a campaign had the ego stopped and being struck.
+CAUSE    The bug-14 fix skipped the following term on ANY positive lateral gap,
+         even a millimetre. A vehicle closing on a stopped one would cross the
+         point where the longitudinal gap goes negative, stop braking entirely,
+         and scrape down its flank.
+FIX      "Laterally clear" now means clear BY A MARGIN: SIDE_CLEARANCE = 0.25 m.
+         Wide enough to keep the bug-14 fix (a two-wheeler passing a bus with
+         0.4 m is still fine), narrow enough to keep braking for a real scrape.
+LESSON   A fix that turns a condition off entirely is usually too blunt. Ask
+         "what is the smallest version of this exemption that solves the case
+         I actually saw?"
+
+--------------------------------------------------------------------------------
+BUG 16 - THE WRONG-WAY RIDER TURNED AROUND AND DROVE CORRECTLY
+--------------------------------------------------------------------------------
+SYMPTOM  The wrong-way scenario stopped being a wrong-way scenario 10 s in.
+CAUSE    Three separate faults:
+           1. The policy used mirrored.d_max, which after mirroring names the
+              OPPOSITE verge - so the rider hugged the wrong edge and drifted
+              across.
+           2. Nothing structurally prevented the heading from rotating all the
+              way round.
+           3. Once fixed, the rider froze head-on against oncoming traffic.
+FIX      Use mirrored.d_min; add a HEADING_CONE of 70 degrees that a wrong-way
+         agent may not rotate outside; give it a crawl_speed of 2.5 m/s and
+         gap_seeking of 1.6 so it filters past oncoming traffic instead of
+         stopping dead.
+LESSON   When you mirror a coordinate frame, EVERY signed quantity flips.
+         Search for all of them, not the one that broke.
+
+--------------------------------------------------------------------------------
+BUG 17 - CORRIDOR BOUNDARY COST MEASURED THE WRONG ROAD
+--------------------------------------------------------------------------------
+SYMPTOM  The car drifted toward the verge when the reference path deviated.
+CAUSE    The boundary term was evaluated in the DERIVED REFERENCE frame, but
+         the corridor bounds are defined in the CORRIDOR frame. Whenever the
+         derived reference bent away from the corridor centre - which is
+         exactly when it matters - the two frames disagreed.
+FIX      Project trajectory points back into corridor coordinates
+         (corridor.to_frenet_batch) before evaluating the boundary term.
+LESSON   In a system with several Frenet frames, always know WHICH frame a
+         quantity is expressed in. Consider naming variables after their frame.
+
+--------------------------------------------------------------------------------
+BUG 18 - SPAWN CRASH: "ValueError: high - low < 0"
+--------------------------------------------------------------------------------
+SYMPTOM  The benchmark campaign died on run 25 of 60.
+CAUSE    Spawn code checked `if (hi - lo) < width: skip`, then sampled from
+         `uniform(lo + width/2, hi - width/2)`. When hi-lo equals width to
+         within floating-point rounding, the check passes but the two computed
+         bounds can land in the wrong order.
+FIX      Compute the inset band FIRST, then compare it: `if hi_in < lo_in:
+         skip`. The test now uses exactly the values the sampler will use.
+LESSON   Never validate with one expression and act with a different one that
+         is only algebraically equal. Floating point is not algebra.
+
+--------------------------------------------------------------------------------
+BUG 19 - THE LIVE CONSOLE NEVER SHOWED REPLAN LATENCY
+--------------------------------------------------------------------------------
+SYMPTOM  The REPLAN tile showed "-- ms" for the whole demo.
+CAUSE    The simulator measured latency as a local variable and passed it only
+         to the metrics accumulator. The websocket frame builder never saw it.
+FIX      Store it on the simulator (self.last_replan_ms) and include it in the
+         payload.
+LESSON   The problem statement explicitly asks for replanning latency. A demo
+         that cannot show the number it claims is a demo a judge is right to
+         distrust. Check that your UI actually displays what you brag about.
+
+--------------------------------------------------------------------------------
+BUG 20 - A FAILED EXPERIMENT WE KEPT (this is a good story too)
+--------------------------------------------------------------------------------
+We hypothesised that zeroing the initial acceleration and lateral velocity
+(s_ddot0, d_ddot0, d_dot0) at standstill would widen the candidate fan.
+
+It made things WORSE: bus stop 41% -> 28%, village road 40% -> 21%, and four
+new collisions. We reverted it and recorded the negative result in a commit and
+a code comment.
+
+LESSON   Keep negative results. "We tried X, it made these three numbers worse,
+         here is the commit" is a stronger answer than never having tried.
+
+--------------------------------------------------------------------------------
+TOOLING BUGS (worth a mention, shows breadth)
+--------------------------------------------------------------------------------
+* `pkill -f "sarathi serve"` killed the shell running it, because the pattern
+  matched the shell's own command line. Now we use PID files.
+* LibreOffice cannot load ANY file in the build sandbox (even a plain .txt),
+  so the normal "convert to PDF and look at it" QA path was unavailable. We
+  wrote a PIL-based renderer that reads the OOXML directly and draws the slides
+  and the resume with Liberation Sans, which is metric-compatible with Arial -
+  so text overflow measured in the preview is real.
+* python-pptx assigns run text but the template's title placeholder had a
+  paragraph with NO runs, so runs[0] raised IndexError. Fixed with a helper
+  that adds a run and inherits endParaRPr formatting when none exists.
+* Committed .pyc files: an early push put 38 compiled bytecode files on main
+  and no source. Fixed by merging the real branch and adding node_modules/ and
+  __pycache__/ rules at the repo root.
+
+
+================================================================================
+PART 7 - PERFORMANCE ENGINEERING
+================================================================================
+The problem statement asks for replanning latency, so this is a scoring line,
+not vanity.
+
+WHERE THE TIME GOES (per 50 ms tick)
+  risk field construction + evaluation   largest single cost
+  lattice generation and scoring         second
+  perception + fusion + prediction       small
+  corridor DP                            small
+
+THE THREE OPTIMISATIONS THAT MATTERED
+
+1. VECTORISE THE RISK FIELD                          116 ms -> 18 ms
+   Originally each kernel was evaluated in a Python loop over candidate points.
+   Now all K kernels x N points are one broadcast numpy expression:
+     delta = points[:, None, :] - mu[None, :, :]     # (N, K, 2)
+   The rotation into each kernel's frame, the flat-top excess, and the Gaussian
+   decay are all array operations. No Python loop touches a point.
+
+2. BATCH THE LATTICE                                  71 ms -> 7.5 ms
+   Same idea: build ALL candidate polynomials as coefficient arrays, then
+   evaluate them together with one polynomial evaluation over an (M, T) grid,
+   instead of looping candidate by candidate.
+
+3. KD-TREE FOR FRENET PROJECTION                      ~34x on batch conversion
+   Nearest-point-on-polyline was a loop over segments. scipy.spatial.cKDTree
+   finds the nearest sample point in O(log n), then we refine locally against
+   the two adjacent segments.
+
+MEASURED RESULT
+  median 95th-percentile replan time    46 ms
+  8 of 10 scenarios inside the 50 ms budget that 20 Hz allows
+  worst case                            72 ms (the dense market scene)
+
+BE HONEST ABOUT THE CAVEAT: the campaign runs four simulations in parallel on
+four cores, so those numbers are pessimistic by roughly a quarter compared to a
+single run on an idle machine. Say that before someone asks.
+
+THE GENERAL LESSON
+  "Python is slow" is not the problem. Python LOOPS are the problem. Every
+  optimisation here was the same move: turn a loop over objects into one array
+  operation over all objects. We did not rewrite anything in C.
+
+
+================================================================================
+PART 8 - TESTING AND MEASUREMENT
+================================================================================
+
+88 TESTS across five files (as pytest collects them):
+  test_core.py          9   geometry, Frenet round-trips, kinematics
+  test_perception.py   16   sensor models, association, merging, log-odds
+  test_risk_field.py   11   kernel shapes, harm weighting, penetration
+  test_scenarios.py    39   every scenario loads, spawns cleanly, is
+                            deterministic, and chaos actually changes things
+  test_traffic_model.py 13  NLB-IDM behaviour, gap seeking, policies
+
+  (test_scenarios.py is only 8 test FUNCTIONS - most are @pytest.mark.parametrize
+   over all ten scenario files, so they collect as 39. Know this distinction if
+   someone asks how many tests you wrote.)
+
+THE TESTS WORTH DESCRIBING (these are behavioural, not unit tests)
+
+  test_nothing_spawns_inside_anything_else
+      Runs every scenario and asserts no two footprints overlap at t=0. This is
+      bug 1, encoded so it can never come back.
+
+  test_ego_starts_with_clear_road
+      Asserts the ego has usable headway at the start. A scenario that starts
+      the ego 1 m behind a bus measures nothing.
+
+  test_scenario_runs_closed_loop_and_is_deterministic
+      Runs the whole loop twice with the same seed and asserts identical
+      results. Determinism is what makes the Monte-Carlo campaign meaningful
+      rather than anecdotal.
+
+  test_chaos_increases_hazard_population
+  test_lane_markings_degrade_with_chaos
+      Assert the difficulty knob actually does something.
+
+THE BENCHMARK HARNESS               scripts/benchmark.py
+  10 scenarios x 3 seeds x 2 controllers = 60 runs, in a process pool.
+  Both controllers see IDENTICAL seeds and IDENTICAL sensor noise.
+  Writes artifacts/benchmark.json - one row per run plus a summary.
+  Each failed run is recorded as a failed run rather than killing the campaign
+  (we learned that when bug 18 killed run 25 of 60).
+
+WHY THE BASELINE MATTERS
+  BaselineLaneFollower is a conventional lane-following planner. It is a FAIR
+  comparison, not a straw man: same sensors, same noise, same seeds. It mostly
+  fails by STOPPING rather than by crashing - which is exactly why the
+  collision counts are close while the progress numbers are not.
+
+REPRODUCIBILITY AS A DESIGN RULE
+  Both presentation decks read benchmark.json at build time and REFUSE TO BUILD
+  without it. A number on a slide cannot drift away from what the code does,
+  because no number on a slide was ever typed by hand.
+
+FAULT ATTRIBUTION IN COLLISIONS
+  Every contact records our own speed and the BEARING of the other body
+  relative to our nose. That separates "we drove into it" from "we were
+  stationary and were struck", which are different failures needing different
+  fixes. A raw collision count cannot tell you which you have.
+
+
+================================================================================
+PART 9 - THE RESULTS, AND HOW TO TALK ABOUT THEM
+================================================================================
+
+CAMPAIGN: 10 scenarios x 3 seeds x 2 controllers, identical seeds and noise.
+
+                                     SARATHI     Lane-following baseline
+  Runs collision-free                25 / 30     27 / 30
+  Mean route progress                43.3 %      36.2 %
+  Scenarios where it gets further    8 of 10     2 of 10
+  Median 95th-pct replan             46 ms       (baseline is trivial)
+
+PER SCENARIO (progress ours / baseline, clean runs out of 3, p95 replan)
+
+  Village road, unmarked     47.6 / 30.4   2/3   47 ms
+  Cattle crossing            49.8 / 46.7   3/3   45 ms
+  Dense market               22.1 / 13.0   3/3   72 ms
+  Highway merge              40.3 / 33.0   3/3   39 ms
+  Unsignalled junction       48.3 / 41.0   1/3   56 ms
+  Narrow bridge, oncoming    61.2 / 61.1   3/3   37 ms
+  Bus stop overtake          34.6 / 36.8   3/3   38 ms
+  Night, wrong-way rider     40.2 / 51.6   1/3   37 ms
+  Construction diversion     27.4 / 21.6   3/3   46 ms
+  School zone                61.9 / 27.3   3/3   47 ms
+
+HOW TO PRESENT THIS - the exact framing
+
+  "We get appreciably further than a lane-based planner without ever reading a
+   lane marking, and we win biggest on the scenarios that are hardest for one:
+   a school at closing time (62% vs 27%), an unmarked village road, a dense
+   market.
+
+   We are NOT yet safer by raw contact count: five of our thirty runs end in
+   contact against the baseline's three. Three of those five happened with our
+   vehicle stationary and another road user driving into it - which is why we
+   record ego speed and impact bearing on every contact. The two we drove into
+   are ours to fix, and they are both in the same two scenarios.
+
+   The baseline's better contact record is mostly a consequence of it not
+   moving. A planner that stops has few collisions and no utility."
+
+DO NOT hide the 25/30 vs 27/30. Volunteering it is what makes the rest
+credible. A judge who discovers it themselves will discount everything else you
+said.
+
+
+================================================================================
+PART 10 - BUILD, PACKAGING AND TOOLING DECISIONS
+================================================================================
+
+WHY uv (and what to say if asked)
+  uv is a Rust-based Python package and project manager. We use it because the
+  single biggest failure mode of a student demo is "it doesn't run on the
+  judge's laptop".
+
+    git clone ...
+    cd automated-driving
+    uv sync          # creates .venv, resolves and installs everything
+    uv run sarathi serve
+
+  uv fetches the correct Python interpreter itself (3.11, pinned in
+  .python-version), so the user does not need Python installed at all.
+  uv.lock is committed, so the resolution is identical on every machine.
+
+PACKAGING DETAILS WORTH KNOWING
+  * Build backend: hatchling. Declared in [build-system].
+  * [project.scripts] sarathi = "sarathi.cli:main" creates the `sarathi`
+    command on install - that is why `uv run sarathi serve` works.
+  * force-include maps scenarios/ into the wheel as sarathi/_scenarios, so the
+    scenario library ships INSIDE the package. That means
+    `uvx --from git+... sarathi serve` works with no checkout on disk.
+  * paths.py resolves scenarios in priority order: explicit --scenarios-dir,
+    then ./scenarios in the working directory, then the bundled copy.
+  * Optional dev extra (pytest, playwright, pillow, python-pptx) so a plain
+    install stays small: `uv run --extra dev pytest`.
+
+THE LIVE DEMO ARCHITECTURE            sarathi/serve.py + assets/mission_control.html
+  * One process. A background thread serves the static HTML on port P; the
+    simulation runs and pushes frames over a websocket on port P+1.
+  * The viewer is ONE HTML file with no build step and no dependencies. Nothing
+    to install, nothing to compile, no node_modules on the demo path.
+  * The SAME renderer serves two data sources: an embedded recorded run
+    (replay mode) or the live socket. One code path, two modes.
+  * LiveSession exposes load / step / place / remove / grab / drag / drop /
+    tune / reset_tuning. Dragging is grab -> move_held -> release, with the
+    held agent excluded from the physics update while held.
+  * Sessions never halt (the `live` flag), so a demo can be left running.
+
+WHY A LIVE DEMO AT ALL - the argument to make
+  "A recorded video invites the question 'how do we know it isn't a replay?'.
+   Someone who places the obstacle themselves has already answered it. The code
+   answering that click is the code in the submission."
+
+THE THRESHOLD PANEL
+  31 tunables in five groups (driving, caution, planner, safety, ablations),
+  all adjustable while the vehicle drives, defined once in tuning.py with
+  min/max/step/description and rendered generically by the viewer. The
+  ablation switches turn off the risk field, the prediction, or RSS so the
+  contribution of each is VISIBLE rather than asserted.
+
+FIGURE CAPTURE                        scripts/capture.py
+  Starts the real server, drives real Chromium via Playwright, and POLLS THE
+  TELEMETRY until it satisfies a condition you give on the command line
+  (behaviour in a set, path clearance above a threshold, speed above a
+  threshold, enough elapsed time) before it takes the screenshot. So a figure
+  in the deck is a moment we CHOSE, not a moment we happened to catch.
+
+GIT HYGIENE (a real lesson from this project)
+  main once contained 38 .pyc files and no source, because a push went wrong.
+  Now: __pycache__/ and *.pyc and node_modules/ are ignored at the repo root,
+  and artifacts/ is ignored EXCEPT for benchmark.json and the eight figures the
+  decks embed - the evidence has to be in the repo or a reviewer cannot check
+  it.
+
+
+================================================================================
+PART 11 - WHAT IS STILL WRONG (say these before you are asked)
+================================================================================
+
+1. STILL TOO CAUTIOUS IN DENSE TRAFFIC
+   Mean route progress is 43%. On the hardest scenarios the car spends a lot of
+   the run stopped. The standstill sampling bug (bug 12) was the biggest cause
+   and is fixed; what remains is genuine conservatism in the cost weights and
+   the hard-constraint probability threshold.
+
+2. FIVE OF THIRTY RUNS END IN CONTACT
+   Concentrated in the unsignalled junction and the night wrong-way scenario.
+   Three of the five had the ego stationary and were struck. The other two are
+   ours.
+
+3. THE DENSE MARKET EXCEEDS THE LATENCY BUDGET
+   72 ms against a 50 ms budget, because that scene has the most agents and the
+   risk field cost scales with agent count. The obvious fix is to cap the
+   number of kernels by distance and relevance; we have not done it.
+
+4. PREDICTION PRIORS ARE HAND-BUILT
+   Not fitted to data. Defensible, but the first thing a research-minded
+   interviewer will push on. The answer: fit them per class from IDD tracks.
+
+5. NO MATLAB / SIMULINK YET
+   The behaviour machine is deliberately Stateflow-shaped and the scenario
+   files are designed to drive both runtimes, but the port is NOT WRITTEN. Do
+   not claim it. The matlab/ directory is empty and the resume does not list
+   MATLAB for exactly this reason.
+
+6. NO CI
+   There is no GitHub Actions workflow. 88 tests exist and pass locally. Do not
+   say "tests run in CI" - we had that sentence in a slide and removed it.
+
+
+================================================================================
+PART 12 - INTERVIEW QUESTION BANK
+================================================================================
+
+--- ABOUT THE IDEA ---
+
+Q: Explain your project in one minute.
+A: PART 1. Learn it verbatim.
+
+Q: Isn't this just the Frenet planner from the Automated Driving Toolbox
+   example?
+A: That example is one of our eight stages. It assumes a reference line and
+   hands you a lattice. Our contribution is what feeds it: a corridor solved
+   from free space instead of read from paint, and a risk field that is
+   class-conditioned, harm-weighted and indexed by time. The example has
+   neither.
+
+Q: Isn't your risk field just a blurred occupancy grid?
+A: A grid is binary, class-blind and single-time. Ours is continuous,
+   class-conditioned (a cow's kernel is not a barricade's), harm-weighted (a
+   pedestrian costs more than sheet metal), and indexed by time so a trajectory
+   is scored against where things WILL be. Blur gives you none of those four.
+
+Q: Why not end-to-end learning?
+A: Two reasons. There is no Indian trajectory dataset large enough to train a
+   safe policy. And when it fails you cannot explain why, which makes it
+   unusable for anything a regulator has to sign off. Our failure modes are
+   inspectable: I can show you the histogram of why each candidate trajectory
+   was rejected.
+
+Q: What is actually novel here?
+A: Three things. Deriving the planning reference from free space rather than
+   markings, so there is no "markings missing" branch anywhere in the code. A
+   risk field that is explicitly harm-weighted. And a traffic model that is
+   non-lane-based, so the thing we test against behaves like Indian traffic
+   rather than like a queue.
+
+--- ABOUT THE ENGINEERING ---
+
+Q: How fast does it run, and how do you know?
+A: 20 Hz closed loop. Median 95th-percentile replan across ten scenarios is
+   46 ms, 8 of 10 inside the 50 ms budget, worst case 72 ms in the densest
+   scene. Measured by scripts/benchmark.py, which also notes that the campaign
+   runs four simulations in parallel, so those numbers are pessimistic.
+
+Q: What was the hardest bug?
+A: Bug 12. Tell the whole story: symptom, the rejection histogram, the two
+   independent causes, the closed-form fix, and the 36% -> 43% result.
+
+Q: How did you test something like this?
+A: 88 tests, but the ones that matter are behavioural: every scenario spawns
+   cleanly, every scenario is deterministic under a fixed seed, and the
+   difficulty knob provably changes the scene. Plus a Monte-Carlo campaign
+   against a baseline on identical seeds - which is what turns "it looked good"
+   into a number.
+
+Q: What would you optimise next?
+A: Cap the risk-field kernel count by distance and relevance, which is the
+   72 ms market case. Then revisit the hard-constraint probability threshold,
+   which is the main remaining source of conservatism.
+
+Q: Why Python? Isn't it too slow for real-time?
+A: It is fast enough here because nothing hot is a Python loop - the risk field
+   and the lattice are both single vectorised numpy expressions over all
+   objects. That took the field from 116 ms to 18 ms and the lattice from 71 ms
+   to 7.5 ms without leaving Python. For a vehicle you would port the hot path,
+   and the structure is already the right one to port because it is array
+   maths, not object graphs.
+
+Q: How would this run on a real car?
+A: 20 Hz on a laptop CPU with no GPU, so compute is not the gap. The gap is
+   sensors and integration: real detections instead of modelled ones, a real
+   localisation source for the corridor, and a vehicle interface. The planner
+   interface would not change - it already consumes tracks, not ground truth.
+
+--- ABOUT THE NUMBERS ---
+
+Q: Is it safer than the baseline?
+A: Not yet by raw contact count - 25 of 30 runs clean against 27 of 30. It is
+   substantially better at making progress: 43% against 36%, ahead on 8 of 10
+   scenarios. And three of our five contacts happened with the vehicle
+   stationary and struck by someone else, which we can show because every
+   contact records our speed and the impact bearing.
+
+Q: So it doesn't really work yet?
+A: It drives every scenario and is collision-free in most runs. Where it is
+   weak it is weak by being SLOW rather than by being unsafe, which is the
+   failure mode we chose. I can show you the exact cause on screen right now,
+   and the remaining fix is a sampling and weighting change, not a rewrite.
+
+Q: Why does it stop so much?
+A: It was much worse, and I can tell you exactly why it was: 81 of 131
+   candidates rejected for unreachable acceleration and 49 for curvature, from
+   a standstill. That is fixed. What remains is the cost weighting and the
+   probability threshold above which a predicted manoeuvre becomes a hard
+   constraint - set too low, the union of everything anyone MIGHT do covers the
+   whole road.
+
+--- ABOUT PROCESS ---
+
+Q: Did you use AI to write this?
+A: Be straightforward. Something like: "Yes, heavily - I used Claude Code as a
+   pair programmer. I directed the architecture, ran the thing, found bugs by
+   watching it, and made the calls about what to fix and what to measure. The
+   rotating-kernel bug and the wrong-way U-turn are both ones I spotted by
+   running it locally and describing what I saw." Then IMMEDIATELY demonstrate
+   understanding by explaining a mechanism in depth - that is what actually
+   settles the question. Nobody minds the tool; they mind if you cannot explain
+   the output.
+
+Q: What would you do differently?
+A: Instrument earlier. The rejection-reason histogram took ten lines and found
+   in five minutes a bug we had been tuning around for days. I would build the
+   measurement harness before the planner next time, not after.
+
+Q: What did you learn?
+A: Three things. Measure before you tune - every threshold I changed by
+   intuition made things worse, and the one diagnostic I wrote found the real
+   cause immediately. Keep the fallback out of the optimiser. And in mixed
+   traffic, every rule you write has to be checked at both ends of the size
+   distribution, because what is reasonable for a bus is catastrophic for a
+   two-wheeler.
+
+
+================================================================================
+PART 13 - TRAPS THAT WILL CATCH YOU OUT
+================================================================================
+
+* Do NOT say "it always works". Five of thirty runs end in contact.
+* Do NOT say "that's just a simulation artefact".
+* Do NOT say "we'll fix that later" without saying when and how.
+* Do NOT claim MATLAB/Simulink work. It is not written.
+* Do NOT claim CI. There is no workflow.
+* Do NOT quote a number that is not in PART 9. If asked for one you do not
+  have, say "we have not measured that; here is how we would" - that answer
+  costs nothing.
+* Do NOT describe the baseline as a straw man. It sees identical sensors,
+  noise and seeds, and it beats us on two scenarios.
+* If someone points at a prediction cone spilling off the road: the mean path
+  is propagated along the corridor, but the cone also draws lateral
+  UNCERTAINTY, and uncertainty is not confined to the road. A pedestrian
+  stepping off the verge is exactly the case we must not model away.
+* If the demo breaks: reset the vehicle, keep talking. If the browser dies,
+  reload - the session survives. If the server dies, second terminal, same
+  command. If everything dies, use the recorded replay page and SAY that is
+  what you are doing.
+
+
+================================================================================
+PART 14 - GLOSSARY
+================================================================================
+
+Frenet frame        Coordinates along a reference line: s = distance along,
+                    d = offset sideways.
+Jerk                Rate of change of acceleration. What passengers feel as a
+                    lurch.
+Jerk-minimal        The polynomial connecting two states with least integrated
+                    squared jerk. Quintic when both endpoints are fully
+                    specified; quartic when the terminal position is free.
+Lattice             The fan of candidate trajectories generated and scored each
+                    tick.
+Corridor            The ribbon of drivable free space our dynamic program
+                    finds. Our replacement for the lane.
+Risk field          Continuous cost over space AND time; class-conditioned and
+                    harm-weighted.
+Anisotropic kernel  A risk blob that is not a circle - longer along the
+                    direction of travel than across it.
+Flat-top kernel     A kernel that is uniformly maximal inside the body
+                    (configuration-space core) and decays outside it.
+Configuration space The obstacle grown by our own footprint, so the vehicle can
+                    be planned for as a single point.
+RSS                 Responsibility-Sensitive Safety. A formal minimum-gap
+                    condition; we invert it to get a safe speed.
+CBF                 Control barrier function. A filter guaranteeing you stay
+                    inside a safe set by slowing your approach to its boundary.
+TTC                 Time to collision on current relative motion.
+IDM                 Intelligent Driver Model - standard car-following model.
+NLB-IDM             Non-lane-based IDM: interaction weighted by lateral overlap
+                    instead of lane membership.
+Pseudo-lane         The lateral influence width a vehicle claims, which grows
+                    with its speed.
+Log-odds            log(p/(1-p)). Lets evidence ADD instead of multiply.
+Ablation            Switching a component off to show what it was contributing.
+Chaos               Our scenario difficulty dial, 0..1: wrong-way riders,
+                    aggression, cattle, barricades, marking visibility.
+Coasting            Continuing to predict a track after detections stop, before
+                    deleting it.
+Determinism         Same scenario + same seed = identical run. What makes the
+                    campaign meaningful.
+
+
+================================================================================
+PART 15 - TEN THINGS TO REMEMBER
+================================================================================
+
+1.  We did not add Indian conditions to a Western planner. We removed the
+    assumption the Western planner is built on.
+2.  The lane centre line became a corridor solved by dynamic programming over
+    free space, re-solved 20 times a second.
+3.  The occupancy grid became a continuous, class-conditioned, harm-weighted,
+    time-indexed risk field.
+4.  Prediction is multi-modal because the average of two futures metres apart
+    is confidently wrong.
+5.  The safety supervisor is MONOTONE - it can only slow us down - which is why
+    no upstream tuning mistake can make the vehicle more aggressive.
+6.  The planner never sees ground truth. It sees noisy, occluded, sometimes
+    misclassified tracks.
+7.  The biggest bug was found by counting why candidates were rejected, not by
+    tuning: 1 usable trajectory out of 131 at a standstill.
+8.  Every number comes out of one committed script, on identical seeds for both
+    controllers.
+9.  43% route progress against the baseline's 36%, ahead on 8 of 10 scenarios -
+    and 25/30 clean against its 27/30, which we volunteer rather than hide.
+10. The demo is live. Someone else places the obstacle. That is the whole
+    argument.
+
+================================================================================
+END
+================================================================================
