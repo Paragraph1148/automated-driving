@@ -3,6 +3,8 @@
 # Caddy terminates TLS and proxies both the page and the WebSocket upgrade to
 # the demo on one upstream port. Set DOMAIN to the name pointing at this box;
 # leave it unset and Caddy serves plain HTTP on :80 for a smoke test.
+name: sarathi
+
 services:
   sarathi:
     build:

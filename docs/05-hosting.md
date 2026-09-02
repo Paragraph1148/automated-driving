@@ -147,8 +147,12 @@ docker run --rm -p 8420:8420 sarathi
 DOMAIN=demo.example.org docker compose -f deploy/compose.yaml up -d
 ```
 
-The image is multi-arch by construction — the same file builds on the Ampere VM
-and on an x86 laptop.
+Built and exercised on x86: 510 MB, starts unprivileged as uid 10001, reports
+healthy on `/healthz`, and holds 1.00x real time with two viewers sharing the
+world — including through Caddy, where a 20-second stream sustained 10.1
+frames/s and the socket stayed open. The image is multi-arch by construction, so
+the same file builds on the Ampere VM, but the ARM build itself has not been
+run here.
 
 ## What is deliberately not solved
 

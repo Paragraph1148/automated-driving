@@ -11,22 +11,25 @@ FROM python:3.11-slim
 # same versions the benchmark numbers were measured against.
 COPY --from=ghcr.io/astral-sh/uv:0.8.17 /uv /usr/local/bin/uv
 
+# The unprivileged user comes first and owns everything from the start. Doing it
+# the other way round — build as root, `chown -R` at the end — rewrites every
+# file in the virtualenv into a fresh layer, and numpy and scipy are large
+# enough that it cost 184 MB of duplicate image for nothing.
+RUN useradd --create-home --uid 10001 sarathi
 WORKDIR /app
+RUN chown sarathi:sarathi /app
+USER sarathi
 
 # Dependencies first: they change far less often than the stack does, so an
 # edit to the planner does not re-resolve numpy and scipy.
-COPY pyproject.toml uv.lock README.md ./
+COPY --chown=sarathi:sarathi pyproject.toml uv.lock README.md ./
 RUN mkdir -p sarathi && touch sarathi/__init__.py \
  && uv sync --locked --no-dev --no-install-project
 
-COPY sarathi/ ./sarathi/
-COPY scenarios/ ./scenarios/
-COPY scripts/ ./scripts/
+COPY --chown=sarathi:sarathi sarathi/ ./sarathi/
+COPY --chown=sarathi:sarathi scenarios/ ./scenarios/
+COPY --chown=sarathi:sarathi scripts/ ./scripts/
 RUN uv sync --locked --no-dev
-
-# Nothing here needs root, and a demo on a public address should not have it.
-RUN useradd --create-home --uid 10001 sarathi && chown -R sarathi:sarathi /app
-USER sarathi
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
