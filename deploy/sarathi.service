@@ -16,7 +16,11 @@ User=sarathi
 Group=sarathi
 WorkingDirectory=/opt/sarathi
 Environment=PATH=/opt/sarathi/.venv/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/opt/sarathi/.venv/bin/sarathi serve --host 127.0.0.1 --port 8420
+# --keep-warm: an Always Free instance whose CPU, network and memory all stay
+# under 20% for seven days is reclaimed by Oracle. The idle-pause would put an
+# unvisited demo exactly there, so on this host the world keeps running — which
+# also means the first visitor arrives at a moving scene instead of a still one.
+ExecStart=/opt/sarathi/.venv/bin/sarathi serve --host 127.0.0.1 --port 8420 --keep-warm
 
 # A judge leaning on the demo should never take the box with it, and a crash
 # mid-demo should come back on its own.
@@ -24,7 +28,7 @@ Restart=always
 RestartSec=2
 # One core is the entire budget for one world; the rest belong to the OS and
 # the proxy. Beyond that the scheduler throttles rather than the box thrashing.
-CPUQuota=140%
+CPUQuota=120%
 MemoryMax=1G
 
 # Nothing here writes to disk, so nothing here needs to be able to.

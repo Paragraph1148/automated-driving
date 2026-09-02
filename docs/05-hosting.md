@@ -94,11 +94,33 @@ plain Ubuntu script, and only the firewall section is Oracle-specific.
 
 ### With a credit card
 
-**Oracle Cloud, always-free Ampere A1** — VM.Standard.A1.Flex, 4 OCPU / 24 GB,
-free indefinitely, 10 TB/month of egress, about 22,000 viewer-hours at our frame
-size. A persistent VM with real cores that stay yours between requests is
-exactly and only what this workload wants, and the card is used for
-verification, not billing.
+**Oracle Cloud, always-free Ampere A1** — VM.Standard.A1.Flex. A persistent VM
+with real cores that stay yours between requests is exactly and only what this
+workload wants, and the card is used for verification, not billing.
+
+Size it at **2 OCPU / 12 GB**, which is the whole Always Free Ampere allowance:
+Oracle halved it in July 2026, from 4 OCPU / 24 GB, without announcing it. The
+allowance is metered in hours — 1,500 OCPU-hours and 9,000 GB-hours a month —
+and a 2 OCPU / 12 GB instance left running consumes 1,488 and 8,928 of them in a
+31-day month. It fits, with about 1% to spare, and the margin is consumed by
+*allocated* time rather than busy time: a second instance spun up "just to test"
+for an afternoon puts you over. Run one instance and nothing else.
+
+That is one core for the world and one for the operating system and the proxy,
+which is exactly why one shared simulation broadcast to every viewer is not an
+optimisation here but the thing that makes it possible at all. 10 TB/month of
+egress is about 22,000 viewer-hours at our frame size — not the binding
+constraint.
+
+**It will be deleted if it looks idle.** Oracle reclaims an Always Free compute
+instance whose 95th-percentile CPU, network *and* memory all sit under 20% over
+a seven-day window. An unvisited demo is precisely that shape, because the pump
+stops when the last viewer leaves — so the very thing that makes the demo polite
+on a laptop is what would silently destroy the VM a week before you need it.
+`deploy/sarathi.service` therefore runs it with `--keep-warm`, which keeps the
+world stepping with nobody connected and restarts the route when the vehicle
+finishes it. The instance stays busy because the demo is actually running, and
+the first visitor arrives at a scene already in motion rather than a still one.
 
 ```bash
 scp deploy/setup-oracle.sh ubuntu@<ip>:
@@ -122,7 +144,8 @@ Two things reliably go wrong, neither of them with the code:
 
 An Ampere core is slower per thread than the x86 box the table above was
 measured on, so expect the step to land nearer the 50 ms budget — possibly over
-it on the dense market scene. The demo degrades to slow motion rather than
+it on the dense market scene. With only two OCPUs there is no second core to
+borrow, either. The demo degrades to slow motion rather than
 breaking, and `hostcheck.py` tells you which side of the line you are on. If the
 default scene is tight, serve a lighter one: `--scenario cattle_crossing`.
 
@@ -155,7 +178,7 @@ other per-invocation runtime.
 | **Cloudflare quick tunnel** | no | unlimited, no account | **Start here.** Instant public HTTPS from your own machine. Random URL, dies with the terminal. |
 | **GitHub Codespaces** | no | 120 core-h + 15 GB/month | **Best no-card cloud option.** Stable URL, stops after 30 min idle. |
 | **Azure for Students** | no | $100 / 12 months, renewable | The only no-card way to get an always-on VM. Needs a college email. |
-| **Oracle Ampere A1** | yes | 4 OCPU / 24 GB, 10 TB, indefinite | Best fit on the merits. Card is for verification, not billing. |
+| **Oracle Ampere A1** | yes | 2 OCPU / 12 GB, 10 TB, indefinite | Best fit on the merits. Halved in July 2026; sized for exactly one world. |
 | **Hugging Face Spaces** | — | Docker Spaces need PRO | **No longer free.** Changed July 2026: Gradio and Docker Spaces require a paid plan; only static Spaces stay free, and this is not static. |
 | **Google Cloud Run** | yes | 180k vCPU-s/month | Viable but needs a billing account. Bills CPU for the whole connection; 60-min cap cuts long sessions. |
 | **Fly.io / Render / Railway** | yes | — | Cards required, and scale-to-zero suspends the simulation anyway. |
@@ -219,4 +242,6 @@ run here.
   the only real exposure is the core it burns, which the `CPUQuota` in the unit
   file bounds.
 - **The pump idles when nobody is connected**, so an unvisited demo costs no CPU.
-  It also means the first visitor gets a world that has not been running.
+  It also means the first visitor gets a world that has not been running. Pass
+  `--keep-warm` to invert that trade, which is right wherever CPU is free and
+  idleness is punished — an Always Free VM being the case in point.

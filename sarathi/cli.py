@@ -87,7 +87,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     from .serve import run
     run(args.scenario, args.chaos, args.seed, args.port, args.scenarios_dir,
-        host=args.host)
+        host=args.host, keep_warm=args.keep_warm)
     return 0
 
 
@@ -142,6 +142,11 @@ def main(argv: list[str] | None = None) -> int:
     srv.add_argument("--host", default="127.0.0.1",
                      help="interface to bind; 0.0.0.0 to accept traffic from "
                           "off the machine (see docs/05-hosting.md)")
+    srv.add_argument("--keep-warm", action="store_true",
+                     help="keep the world running with nobody connected, so "
+                          "the first visitor arrives at a moving scene. Also "
+                          "what stops Oracle reclaiming an Always Free VM it "
+                          "has decided is idle (docs/05-hosting.md)")
     srv.set_defaults(func=cmd_serve)
 
     lst = sub.add_parser("list", help="list available scenarios")

@@ -202,3 +202,42 @@ def test_a_malformed_command_does_not_drop_the_connection():
                 # Still live, still streaming the same world.
                 assert len(await h.frames(conn, 4)) == 4
     run(case())
+
+
+def test_keep_warm_runs_the_world_with_nobody_connected():
+    """An Always Free VM whose CPU, network and memory all sit under 20% for a
+    week gets reclaimed, and the idle-pause would put it there. --keep-warm is
+    the demo doing real work, and the first visitor lands on a moving scene."""
+    async def case():
+        h = Harness(port=PORT + 8)
+        h.server.keep_warm = True
+        async with h.listen():
+            h.server.start()
+            assert h.server._pump is not None, "warm server should step at once"
+            assert not h.server.clients
+            t0 = h.session.sim.t
+            await asyncio.sleep(1.0)
+            assert h.session.sim.t > t0, "world did not advance while unwatched"
+
+            # A viewer joining does not restart or double-drive the world.
+            async with websockets.connect(h.url()) as conn:
+                frames = await h.frames(conn, 6)
+                assert frames[0]["t"] >= t0
+                span = frames[-1]["t"] - frames[0]["t"]
+                assert span == pytest.approx(0.5, abs=0.3)
+            # And leaving does not stop it.
+            await asyncio.sleep(0.3)
+            assert h.server._pump is not None
+            assert not h.server.clients
+    run(case())
+
+
+def test_without_keep_warm_the_pump_still_idles():
+    """The laptop default is unchanged: no viewers, no CPU burned."""
+    async def case():
+        h = Harness(port=PORT + 9)
+        assert h.server.keep_warm is False
+        async with h.listen():
+            h.server.start()
+            assert h.server._pump is None, "cold server should not step"
+    run(case())

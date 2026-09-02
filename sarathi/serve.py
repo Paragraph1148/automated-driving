@@ -198,10 +198,16 @@ class LiveServer:
     appeared to teleport as soon as a second person opened the page.
     """
 
-    def __init__(self, session: LiveSession):
+    def __init__(self, session: LiveSession, keep_warm: bool = False):
         self.session = session
+        self.keep_warm = keep_warm
         self.clients: set = set()
         self._pump: asyncio.Task | None = None
+
+    def start(self) -> None:
+        """Begin stepping before anyone has connected, if asked to stay warm."""
+        if self.keep_warm and self._pump is None:
+            self._pump = asyncio.create_task(self._drive())
 
     def attach(self, websocket) -> None:
         self.clients.add(websocket)
@@ -210,10 +216,10 @@ class LiveServer:
 
     def detach(self, websocket) -> None:
         self.clients.discard(websocket)
-        if not self.clients and self._pump is not None:
-            #: Nobody is watching, so stop burning the core. A free-tier VM has
-            #: three others to run the proxy with, and an idle demo that keeps a
-            #: CPU pinned looks identical to a runaway one.
+        if not self.clients and self._pump is not None and not self.keep_warm:
+            # Nobody is watching, so stop burning the core: on a laptop, or
+            # anywhere CPU is metered, an idle demo pinning a core looks
+            # identical to a runaway one.
             self._pump.cancel()
             self._pump = None
 
@@ -224,6 +230,11 @@ class LiveServer:
         next_at = time.perf_counter()
         while True:
             self.session.step()
+            if self.keep_warm and self.session.sim.finished:
+                # A warm world that has driven its route to the end stops being
+                # a warm world. Put the vehicle back on the road and let it run,
+                # so the first visitor arrives at something already moving.
+                self.session.restart_ego()
             tick += 1
             if tick % 2 == 0:
                 await self.broadcast(self.session.frame())
@@ -361,23 +372,27 @@ def _http_routes(page: bytes):
 
 def run(scenario: str = "village_road_unmarked", chaos: float | None = None,
         seed: int | None = None, port: int = 8420,
-        scenarios: str | None = None, host: str = "127.0.0.1") -> None:
+        scenarios: str | None = None, host: str = "127.0.0.1",
+        keep_warm: bool = False) -> None:
     from websockets.asyncio.server import serve
 
     session = LiveSession(scenario, chaos, seed, scenarios)
-    server = LiveServer(session)
+    server = LiveServer(session, keep_warm=keep_warm)
 
     shown = "localhost" if host in ("127.0.0.1", "0.0.0.0", "::") else host
     print(f"\n  SARATHI live  ->  http://{shown}:{port}")
     print(f"  scenario: {scenario}   chaos: {session.chaos:.2f}")
     if host == "0.0.0.0":
         print("  listening on every interface")
+    if keep_warm:
+        print("  keeping the world running with nobody connected")
     print()
 
     async def main():
         async def handler(websocket):
             await _handle(server, websocket)
 
+        server.start()
         async with serve(handler, host, port, max_size=None,
                          process_request=_http_routes(_live_page())):
             await asyncio.Future()

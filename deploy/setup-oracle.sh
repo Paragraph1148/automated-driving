@@ -11,6 +11,16 @@
 #   sudo bash setup-oracle.sh demo.example.org
 set -euo pipefail
 
+# Oracle's default image is Oracle Linux, which has dnf rather than apt. Say so
+# in one line now instead of failing three commands in with a confusing error.
+if ! command -v apt-get >/dev/null 2>&1; then
+  echo "This script is written for the Ubuntu images (apt-get)." >&2
+  echo "You appear to be on: $(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME")" >&2
+  echo "Recreate the instance choosing Canonical Ubuntu 22.04, or port the" >&2
+  echo "package steps to dnf — the rest of the script is distro-agnostic." >&2
+  exit 1
+fi
+
 DOMAIN="${1:-}"
 REPO="${SARATHI_REPO:-https://github.com/Paragraph1148/automated-driving}"
 BRANCH="${SARATHI_BRANCH:-main}"
@@ -49,6 +59,8 @@ sudo -u sarathi "$APP/.venv/bin/python" scripts/hostcheck.py || true
 
 echo "==> systemd unit"
 install -m 644 "$APP/deploy/sarathi.service" /etc/systemd/system/sarathi.service
+grep -q -- --keep-warm /etc/systemd/system/sarathi.service \
+  || echo "note: unit is not using --keep-warm; see docs/05-hosting.md" >&2
 systemctl daemon-reload
 systemctl enable --now sarathi
 systemctl restart sarathi
