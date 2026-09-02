@@ -44,12 +44,61 @@ connection — the old arrangement stepped the world once per connected browser,
 so the vehicle visibly ran at double speed the moment a second judge opened the
 page.
 
-## The recommendation: Oracle Cloud, always-free Ampere A1
+## Pick by what you can pay with
 
-**VM.Standard.A1.Flex, 4 OCPU / 24 GB, Ubuntu.** Free indefinitely, not a trial,
-and 10 TB/month of egress — about 22,000 viewer-hours at our frame size. It is a
-persistent VM with real cores that stay yours between requests, which is exactly
-and only what this workload wants.
+Every "free tier" worth having asks for a card as identity verification, Oracle
+included — its always-free Ampere shape is the best fit for this workload and
+you still cannot reach it without one. So the first question is not which host
+is best, it is which host will let you in.
+
+### No credit card
+
+**A tunnel from a machine you already have.** No account, no card, no server:
+
+```bash
+./scripts/share.sh
+```
+
+That serves the demo on loopback, opens a Cloudflare quick tunnel and prints an
+`https://<random>.trycloudflare.com` URL anyone can open. It works because the
+page and the socket share one port and the viewer derives `wss://` from the
+page's origin — one tunnel carries both, and TLS terminates at Cloudflare.
+
+The URL is random and changes every run, and the demo lives only as long as the
+terminal stays open. For a judged demo that is usually the right trade: the
+laptop is in the room anyway, and a judge dragging a cow across your screen is
+the whole argument. Some campus networks block the tunnel transport, so run it
+once on the network you will present from — the script tells you whether the URL
+is actually reachable rather than leaving you to find out live.
+
+**GitHub Codespaces**, when you want it off your laptop. A personal account
+includes 120 core-hours and 15 GB a month with no payment method on file — 60
+hours of a 2-core machine, which is more demo than you will ever give — and
+usage simply stops when the quota does. `.devcontainer/` is set up, so:
+
+```bash
+uv run sarathi serve
+gh codespace ports visibility 8420:public -c $CODESPACE_NAME
+```
+
+Port visibility cannot be set from `devcontainer.json`; it is that command or
+the Ports panel. The codespace stops after 30 minutes idle and the URL is stable
+across restarts.
+
+**Azure for Students**, if you have a college email — which, for an SIH entry,
+you do. $100 of credit for 12 months, renewable while you are a student, and
+explicitly no credit card. That buys a small always-on VM, which is the only
+option in this section that survives you closing your laptop. Provision a B1s or
+B2s running Ubuntu and `deploy/setup-oracle.sh` works on it unchanged — it is a
+plain Ubuntu script, and only the firewall section is Oracle-specific.
+
+### With a credit card
+
+**Oracle Cloud, always-free Ampere A1** — VM.Standard.A1.Flex, 4 OCPU / 24 GB,
+free indefinitely, 10 TB/month of egress, about 22,000 viewer-hours at our frame
+size. A persistent VM with real cores that stay yours between requests is
+exactly and only what this workload wants, and the card is used for
+verification, not billing.
 
 ```bash
 scp deploy/setup-oracle.sh ubuntu@<ip>:
@@ -101,17 +150,21 @@ other per-invocation runtime.
 
 ## The alternatives, ranked
 
-| Host | Free allowance | Verdict |
-|---|---|---|
-| **Oracle Ampere A1** | 4 OCPU / 24 GB, 10 TB egress, indefinite | **Recommended.** Persistent cores, enough headroom for three worlds. |
-| **Hugging Face Spaces** | 2 vCPU / 16 GB, Docker, HTTPS included | **Best fallback.** Push `deploy/Dockerfile`, get a public TLS URL, no VM to administer. Sleeps after ~48 h idle; wakes on request. One world, since two vCPU. |
-| **Google Cloud Run** | 180k vCPU-s/month, WebSockets to 60 min | Viable, ~50 vCPU-hours/month ≈ 60 hours of demo. Bills for CPU for the whole connection, and the 60-minute cap disconnects a long session. |
-| **Fly.io** | No usable perpetual free tier now | Scale-to-zero would suspend the simulation anyway. |
-| **Render** | — | Ruled out by you. Free web services sleep and the restart is slow. |
-| **AWS Lambda** | — | See above. Wrong shape at any price. |
+| Host | Card? | Free allowance | Verdict |
+|---|---|---|---|
+| **Cloudflare quick tunnel** | no | unlimited, no account | **Start here.** Instant public HTTPS from your own machine. Random URL, dies with the terminal. |
+| **GitHub Codespaces** | no | 120 core-h + 15 GB/month | **Best no-card cloud option.** Stable URL, stops after 30 min idle. |
+| **Azure for Students** | no | $100 / 12 months, renewable | The only no-card way to get an always-on VM. Needs a college email. |
+| **Oracle Ampere A1** | yes | 4 OCPU / 24 GB, 10 TB, indefinite | Best fit on the merits. Card is for verification, not billing. |
+| **Hugging Face Spaces** | — | Docker Spaces need PRO | **No longer free.** Changed July 2026: Gradio and Docker Spaces require a paid plan; only static Spaces stay free, and this is not static. |
+| **Google Cloud Run** | yes | 180k vCPU-s/month | Viable but needs a billing account. Bills CPU for the whole connection; 60-min cap cuts long sessions. |
+| **Fly.io / Render / Railway** | yes | — | Cards required, and scale-to-zero suspends the simulation anyway. |
+| **PythonAnywhere** | no | free tier | **Cannot work:** the free tier is WSGI-only, with no WebSocket support. |
+| **AWS Lambda** | yes | — | See above. Wrong shape at any price. |
 
-For demo day specifically, Oracle plus Hugging Face Spaces as a standing backup
-is the combination worth having: two URLs, no shared failure mode, both free.
+For demo day: the tunnel as the thing you actually present from, and a Codespace
+kept warm as the backup with a stable link. Two routes, no shared failure mode,
+neither needing a card.
 
 ## Running it
 
@@ -133,7 +186,8 @@ curl -s localhost:8420/healthz                 # no socket, no simulation starte
 the proxy is the only thing on a public port.
 
 **No domain?** A Cloudflare tunnel gives TLS and a public hostname without
-opening any port, which side-steps the Oracle firewall layers entirely:
+opening any port, which side-steps the Oracle firewall layers entirely.
+`scripts/share.sh` does this for you, or by hand on the server:
 
 ```bash
 cloudflared tunnel --url http://localhost:8420

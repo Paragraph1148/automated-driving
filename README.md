@@ -61,19 +61,22 @@ has already answered it.
 
 ### Putting it on the internet
 
-The page and the telemetry socket share one port, so there is one listener to
-expose and one certificate to terminate:
-
 ```bash
-scp deploy/setup-oracle.sh ubuntu@<ip>:
-ssh ubuntu@<ip> 'sudo bash setup-oracle.sh demo.example.org'
+./scripts/share.sh
 ```
 
-That is a free Oracle Ampere VM, TLS included. One simulation is broadcast to
-everyone connected, so a world costs most of a CPU core and a spectator costs
-128 KiB/s and nothing else — which is what decides the host.
-**[docs/05-hosting.md](docs/05-hosting.md)** has the measurements, the Docker and
-Hugging Face routes, and why a serverless runtime cannot do this.
+Serves the demo and opens a Cloudflare quick tunnel to it, printing an
+`https://…trycloudflare.com` URL anyone can open. No account, no card, no
+server — and it works only because the page and the telemetry socket share one
+port, so a single tunnel carries both and the viewer derives `wss://` from the
+page's own origin.
+
+For a link that outlives the terminal there is a Codespaces devcontainer, a
+Dockerfile, and a one-command Oracle setup script.
+**[docs/05-hosting.md](docs/05-hosting.md)** ranks the hosts by what they ask you
+to pay with, has the measurements behind the choice — a world costs most of a
+CPU core, a spectator costs 128 KiB/s and no CPU — and explains why a serverless
+runtime cannot serve this at all.
 
 ---
 
@@ -91,6 +94,7 @@ uv run sarathi run market_dense_mixed --record run.json
 uv run sarathi replay run.json -o page.html    # shareable replay page
 uv run --extra dev pytest                      # 97 tests
 uv run python scripts/hostcheck.py             # can this box hold 20 Hz?
+./scripts/share.sh                             # public URL via a tunnel
 ```
 
 `--chaos 0..1` is a single knob over the whole scene: wrong-way riders, driver
@@ -226,11 +230,13 @@ sarathi/          the stack — runs anywhere, no licence required
   serve.py       live interactive server
 scenarios/       *.yaml — one spec per scenario, shipped inside the package
 scripts/         benchmark.py (the evidence), capture.py (the figures),
-                 hostcheck.py (can this machine hold 20 Hz?)
+                 hostcheck.py (can this machine hold 20 Hz?),
+                 share.sh (a public URL in one command)
 tests/           97 tests, including behavioural regressions
 docs/            architecture, problem statement, team plan, MATLAB bridge,
                  hosting
 deploy/          Dockerfile, compose, Caddyfile, systemd unit, Oracle setup
+.devcontainer/   GitHub Codespaces, for hosting without a credit card
 ppt/             the SIH idea submission deck and the internal briefing
 artifacts/       benchmark.json and the figures the decks embed
 ```
