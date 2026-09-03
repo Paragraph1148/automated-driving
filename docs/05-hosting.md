@@ -222,6 +222,19 @@ opening any port, which side-steps the Oracle firewall layers entirely.
 cloudflared tunnel --url http://localhost:8420
 ```
 
+**Changing the code afterwards.** `/opt/sarathi` is a checkout that
+`setup-oracle.sh` resets with `git reset --hard`, so it is not a place to edit:
+keep your own clone in `$HOME` and move changes across.
+
+```bash
+sudo bash deploy/redeploy.sh                          # pull the branch, restart
+sudo bash deploy/redeploy.sh --from ~/automated-driving  # uncommitted work
+```
+
+It syncs dependencies, restarts the service and waits on `/healthz` — a unit
+that is `active` is not yet a demo that is serving. If it does not come back it
+prints the journal and the command to roll back to the previous commit.
+
 **Docker instead of systemd:**
 
 ```bash

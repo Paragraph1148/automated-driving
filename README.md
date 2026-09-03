@@ -235,7 +235,8 @@ scripts/         benchmark.py (the evidence), capture.py (the figures),
 tests/           99 tests, including behavioural regressions
 docs/            architecture, problem statement, team plan, MATLAB bridge,
                  hosting
-deploy/          Dockerfile, compose, Caddyfile, systemd unit, Oracle setup
+deploy/          Dockerfile, compose, Caddyfile, systemd unit, Oracle setup,
+                 redeploy (ship a change to a running host)
 .devcontainer/   GitHub Codespaces, for hosting without a credit card
 ppt/             the SIH idea submission deck and the internal briefing
 artifacts/       benchmark.json and the figures the decks embed
