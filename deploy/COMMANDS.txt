@@ -188,8 +188,18 @@
  If the instance is lost or reclaimed, from a fresh Ubuntu VM:
 
    [LAPTOP] scp -i <key> deploy/setup-oracle.sh ubuntu@<new-ip>:
-            ssh -i <key> ubuntu@<new-ip> 'sudo bash setup-oracle.sh'
-            ssh -i <key> ubuntu@<new-ip> 'sudo bash setup-oracle.sh my.domain'
+            ssh -i <key> ubuntu@<new-ip> \
+              'sudo SARATHI_BRANCH=claude/sarathi-hosting-options-ey26qa \
+                    bash setup-oracle.sh'
+
+ SARATHI_BRANCH matters until this work is merged to main: run from a copy of
+ the script on its own, it defaults to main, and main has no deploy/ directory.
+ Run from inside a clone it uses that clone's branch and you can omit it.
+
+ Add a domain as the last argument for automatic HTTPS:
+
+   [VM]     sudo SARATHI_BRANCH=claude/sarathi-hosting-options-ey26qa \
+                 bash deploy/setup-oracle.sh my.domain
 
  Then, in the Oracle console — the one step no script can do:
 

@@ -23,8 +23,24 @@ fi
 
 DOMAIN="${1:-}"
 REPO="${SARATHI_REPO:-https://github.com/Paragraph1148/automated-driving}"
-BRANCH="${SARATHI_BRANCH:-main}"
 APP=/opt/sarathi
+
+# Default to the branch this script is being run from rather than main. The
+# deployment assets can live only on a feature branch, and cloning main then
+# produces a checkout with no deploy/ directory — which fails much later, at
+# `install`, with an error that says nothing about branches. Falls back to main
+# when the script was copied somewhere on its own.
+_here="$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd || true)"
+_own_branch="$(git -C "${_here:-.}/.." rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+case "$_own_branch" in ""|HEAD) _own_branch=main ;; esac
+BRANCH="${SARATHI_BRANCH:-$_own_branch}"
+
+# uv downloads its own interpreter when the system has no matching Python. As
+# root that lands in /root/.local/share/uv/python, and /root is mode 700 — so
+# the venv symlinks to a binary the service user cannot execute, and the demo
+# dies with "Permission denied" on a path that plainly exists. Put managed
+# interpreters somewhere every user can read.
+export UV_PYTHON_INSTALL_DIR=/opt/uv/python
 
 echo "==> packages"
 export DEBIAN_FRONTEND=noninteractive
@@ -37,10 +53,27 @@ id -u sarathi &>/dev/null || useradd --system --home "$APP" --shell /usr/sbin/no
 echo "==> code at $APP ($BRANCH)"
 if [ -d "$APP/.git" ]; then
   git -C "$APP" fetch --depth 1 origin "$BRANCH"
-  git -C "$APP" reset --hard "origin/$BRANCH"
+  # FETCH_HEAD, not origin/$BRANCH: a shallow fetch of a branch the clone was
+  # not made from does not necessarily update the remote-tracking ref.
+  git -C "$APP" reset --hard FETCH_HEAD
 else
   git clone --depth 1 --branch "$BRANCH" "$REPO" "$APP"
 fi
+
+# Fail here, naming the cause, rather than at `install` several steps later.
+for needed in deploy/sarathi.service scripts/hostcheck.py; do
+  [ -e "$APP/$needed" ] && continue
+  cat >&2 <<EOF
+
+  $BRANCH does not contain $needed.
+
+  The deployment files are probably on another branch. Re-run pointing at it:
+
+    sudo SARATHI_BRANCH=claude/sarathi-hosting-options-ey26qa bash $0 $DOMAIN
+
+EOF
+  exit 1
+done
 
 echo "==> uv and dependencies"
 # uv installs the interpreter too, so the VM's system Python is never touched
@@ -48,14 +81,24 @@ echo "==> uv and dependencies"
 if [ ! -x /usr/local/bin/uv ]; then
   curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
 fi
+mkdir -p "$UV_PYTHON_INSTALL_DIR"
+chmod -R a+rX /opt/uv
+# A venv from an earlier run can point at an interpreter under /root that the
+# service user cannot execute. Rebuild it rather than inherit the problem.
+if [ -d "$APP/.venv" ] && ! sudo -u sarathi test -x "$APP/.venv/bin/python"; then
+  echo "    existing venv is unusable by the service user; rebuilding it"
+  rm -rf "$APP/.venv"
+fi
 cd "$APP"
 /usr/local/bin/uv sync --locked --no-dev
+# The interpreter uv just fetched must stay readable by the service user too.
+chmod -R a+rX /opt/uv
 chown -R sarathi:sarathi "$APP"
 
 echo "==> checking this machine can hold 20 Hz"
 # An Ampere core is slower than a laptop's. Better to find that out now than
 # in front of a judge; the demo still runs either way, just slower.
-sudo -u sarathi "$APP/.venv/bin/python" scripts/hostcheck.py || true
+sudo -u sarathi env HOME="$APP" "$APP/.venv/bin/python" scripts/hostcheck.py || true
 
 echo "==> systemd unit"
 install -m 644 "$APP/deploy/sarathi.service" /etc/systemd/system/sarathi.service

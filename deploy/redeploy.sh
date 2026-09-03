@@ -51,7 +51,12 @@ fi
 chown -R sarathi:sarathi "$APP"
 
 echo "==> syncing dependencies"
-sudo -u sarathi env HOME=/home/sarathi /usr/local/bin/uv sync --locked --no-dev --project "$APP"
+# HOME is $APP: the service user was created with --home /opt/sarathi, and
+# /home/sarathi does not exist. UV_PYTHON_INSTALL_DIR must match what
+# setup-oracle.sh used, or uv re-downloads the interpreter into a directory
+# this user cannot read back.
+sudo -u sarathi env HOME="$APP" UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+  /usr/local/bin/uv sync --locked --no-dev --project "$APP"
 
 echo "==> restarting"
 systemctl restart sarathi
