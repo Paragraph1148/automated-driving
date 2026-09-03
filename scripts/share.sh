@@ -68,18 +68,28 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # --- the demo, on loopback: the tunnel is the only way in -------------------
-echo "==> starting the demo on 127.0.0.1:$PORT"
-( cd "$ROOT" && uv run sarathi serve --port "$PORT" --scenario "$SCENARIO" \
-    >"$LOG_DIR/serve.log" 2>&1 ) &
-SERVE_PID=$!
+# On a deployed host the systemd unit already owns this port. Starting a second
+# server there would fail to bind while /healthz kept answering from the first,
+# so the wait below would succeed against a process that had already died and
+# the script would exit the moment it printed the URL. Attach instead.
+if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then
+  echo "==> a demo is already serving on 127.0.0.1:$PORT — tunnelling to it"
+  echo "    (its scenario is whatever it was started with, not --scenario)"
+  SERVE_PID=""
+else
+  echo "==> starting the demo on 127.0.0.1:$PORT"
+  ( cd "$ROOT" && uv run sarathi serve --port "$PORT" --scenario "$SCENARIO" \
+      >"$LOG_DIR/serve.log" 2>&1 ) &
+  SERVE_PID=$!
 
-for _ in $(seq 60); do
-  if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then break; fi
-  if ! kill -0 "$SERVE_PID" 2>/dev/null; then
-    echo "the demo failed to start:" >&2; cat "$LOG_DIR/serve.log" >&2; exit 1
-  fi
-  sleep 0.5
-done
+  for _ in $(seq 60); do
+    if curl -fsS "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1; then break; fi
+    if ! kill -0 "$SERVE_PID" 2>/dev/null; then
+      echo "the demo failed to start:" >&2; cat "$LOG_DIR/serve.log" >&2; exit 1
+    fi
+    sleep 0.5
+  done
+fi
 
 # --- the tunnel -------------------------------------------------------------
 echo "==> opening a Cloudflare quick tunnel"
@@ -132,4 +142,5 @@ echo "  │  Ctrl-C stops the demo and the tunnel."
 echo "  └─────────────────────────────────────────────────────────────"
 echo
 
-wait "$SERVE_PID"
+# Attached mode has no server of its own to wait on, so hold on the tunnel.
+wait "${SERVE_PID:-$TUNNEL_PID}"
