@@ -101,6 +101,15 @@ chown -R sarathi:sarathi "$APP"
 echo "==> checking this machine can hold 20 Hz"
 # An Ampere core is slower than a laptop's. Better to find that out now than
 # in front of a judge; the demo still runs either way, just slower.
+#
+# On a re-run the service is already up, and with --keep-warm it is pinning the
+# core. Measuring against that halves every number and makes a machine that
+# holds real time look like one that cannot. Stop it first; the restart further
+# down brings it back.
+if systemctl is-active --quiet sarathi 2>/dev/null; then
+  echo "    stopping the running demo so the measurement is not competing with it"
+  systemctl stop sarathi
+fi
 sudo -u sarathi env HOME="$APP" "$APP/.venv/bin/python" scripts/hostcheck.py || true
 
 echo "==> systemd unit"
@@ -198,13 +207,21 @@ apt-get install -y -qq iptables-persistent >/dev/null 2>&1 || true
 mkdir -p /etc/iptables
 netfilter-persistent save >/dev/null 2>&1 || iptables-save >/etc/iptables/rules.v4
 
+# ${DOMAIN:-x} returns DOMAIN when it is set, so the obvious one-liner printed
+# the name twice. Decide it plainly instead.
+if [ -n "$DOMAIN" ]; then
+  PUBLIC_URL="https://$DOMAIN"
+else
+  PUBLIC_URL="http://$(curl -s --max-time 5 ifconfig.me || echo '<public ip>')"
+fi
+
 cat <<EOF
 
   done.
 
   local check :  curl -s localhost:8420/healthz
   through caddy: curl -sI localhost/
-  public       : ${DOMAIN:+https://$DOMAIN}${DOMAIN:-http://$(curl -s --max-time 5 ifconfig.me || echo '<public ip>')}
+  public       : $PUBLIC_URL
 
   Still not reachable from outside? It is the VCN security list, not this box.
   Networking > Virtual Cloud Networks > your VCN > Security Lists > Default,

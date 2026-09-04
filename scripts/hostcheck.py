@@ -60,6 +60,24 @@ def measure(scenario: str, ticks: int, warmup: int) -> dict:
             "stream_kib_s": payload * FRAME_HZ / 1024}
 
 
+def demo_already_running(port: int = 8420) -> bool:
+    """Is something already serving on the demo's port?
+
+    It almost certainly is, on a deployed host: the service runs with
+    --keep-warm, so it holds the core continuously. Timing against that measures
+    two processes sharing one core and reports roughly half the truth, which
+    reads as a machine that cannot hold real time when it can.
+    """
+    import urllib.error
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz",
+                                    timeout=1.0) as r:
+            return r.status == 200
+    except (urllib.error.URLError, OSError):
+        return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -73,6 +91,12 @@ def main() -> int:
     scenarios = args.scenario or ["village_road_unmarked", "market_dense_mixed"]
     cores = os.cpu_count() or 1
     print(f"{platform.machine()}  {cores} core(s)  {platform.python_version()}\n")
+
+    if demo_already_running():
+        print("WARNING: a demo is already serving on :8420, and on one core it is")
+        print("         competing with this measurement for it. Every number below")
+        print("         will be roughly twice what the machine can really do.")
+        print("         Stop it first:  sudo systemctl stop sarathi\n")
 
     results = [measure(s, args.ticks, args.warmup) for s in scenarios]
     print(f"{'scenario':<26} {'step':>8} {'p95':>8} {'frame':>7} "

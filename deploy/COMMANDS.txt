@@ -142,7 +142,8 @@
 ------------------------------------------------------------------------------
 
  Can this box hold 20 Hz? Stop the service first or you are timing the demo
- competing with itself for the one core:
+ competing with itself for the one core — with --keep-warm it is holding that
+ core continuously, so the numbers come out roughly half of the truth:
 
    [VM]     sudo systemctl stop sarathi
             cd ~/automated-driving && uv run python scripts/hostcheck.py
