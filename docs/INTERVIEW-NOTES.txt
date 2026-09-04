@@ -7,9 +7,10 @@ Project : SARATHI - adaptive path planning and collision avoidance for
           autonomous vehicles on unstructured Indian roads
 Context : Smart India Hackathon 2026, problem statement SIH26037 (MathWorks)
 Repo    : github.com/Paragraph1148/automated-driving  (branch: main)
-Size    : ~6,600 lines of Python in sarathi/, 760 lines of tests, one 788-line
+Size    : ~6,700 lines of Python in sarathi/, 1,000 lines of tests, one 798-line
           HTML viewer, 10 scenario files
-Runtime : 20 Hz closed loop on a laptop CPU. No GPU. No cloud. No MATLAB licence.
+Runtime : 20 Hz closed loop on a laptop CPU. No GPU. No MATLAB licence.
+Live at : sarathi.rishabhkushwaha.com - one always-free Oracle Ampere core
 
 --------------------------------------------------------------------------------
 HOW TO USE THIS FILE
@@ -978,6 +979,105 @@ TOOLING BUGS (worth a mention, shows breadth)
   __pycache__/ rules at the repo root.
 
 
+--------------------------------------------------------------------------------
+BUG 21 - THE DEMO COULD NEVER HAVE WORKED OVER HTTPS
+--------------------------------------------------------------------------------
+SYMPTOM  Nothing, on a laptop. The demo worked perfectly at localhost:8420 and
+         would have failed the first time anyone opened it over TLS.
+CAUSE    Two separate things. The page was served on port P and the telemetry
+         socket on port P+1, both bound to 127.0.0.1 with no way to change
+         either. And the viewer built its socket URL as
+         `ws://${location.hostname}:${port+1}` - a hardcoded plaintext scheme.
+         A browser refuses to open a ws:// socket from an https:// page; it is
+         mixed content and it is blocked outright.
+FIX      One port for both. The page is served by the websockets library's own
+         process_request hook, and the socket upgrades at /ws on the same
+         origin. The viewer now derives the scheme from the page it was loaded
+         from: `location.protocol === "https:" ? "wss:" : "ws:"`.
+LESSON   Two bugs that are invisible on localhost and fatal in production. Also
+         the reason the whole thing became deployable: one port means one
+         listener to expose, one certificate, one reverse_proxy line, and one
+         Cloudflare tunnel can carry the whole demo.
+
+--------------------------------------------------------------------------------
+BUG 22 - THE WORLD RAN AT DOUBLE SPEED WHEN A SECOND PERSON WATCHED
+--------------------------------------------------------------------------------
+SYMPTOM  Open the demo in two browsers and the vehicle visibly moves twice as
+         fast. Three browsers, three times.
+CAUSE    Every websocket connection started its own pump task, and every pump
+         called step() on the ONE shared session. N viewers stepped the same
+         world N times per wall-clock second.
+FIX      The pump belongs to the server, not to the connection. One pump steps
+         the world; each frame is serialised once and broadcast to everyone.
+         The pump starts on the first connection and stops on the last, unless
+         --keep-warm is set.
+LESSON   Found by opening two tabs, which nobody had done. Ask what happens
+         when there are two of something - two clients, two threads, two
+         instances - because the answer is often that the code assumed one.
+
+--------------------------------------------------------------------------------
+BUG 23 - ONE BAD MESSAGE BLACKED OUT EVERY VIEWER
+--------------------------------------------------------------------------------
+SYMPTOM  Sending {"cmd":"place","cls":"unicorn"} closed the socket with a 1011
+         internal error. On a public URL, one malformed message from anyone
+         would end that person's session - and the same class of error from a
+         missing scenario name would too.
+CAUSE    The command handler ran inside the connection's message loop with no
+         error boundary, so a ValueError from an unknown enum member escaped
+         and killed the connection.
+FIX      Each command is applied inside a try/except that logs and continues.
+         A bad command now costs the command, not the session.
+LESSON   The moment a service is public, every input is adversarial by default -
+         not maliciously, just by accident. Found by a test that sent junk,
+         which is why the test existed.
+
+--------------------------------------------------------------------------------
+BUG 24 - THE HOST BENCHMARK MEASURED ITSELF COMPETING WITH THE DEMO
+--------------------------------------------------------------------------------
+SYMPTOM  hostcheck.py reported 0.69x real time on the deployed VM. An earlier
+         run on the same machine had reported 1.00x. Nothing had changed.
+CAUSE    The second run happened while the demo service was already running
+         with --keep-warm, holding the single core. The benchmark timed two
+         CPU-bound processes sharing one core and reported half the truth.
+FIX      The setup script stops the service before measuring, and hostcheck.py
+         itself checks whether anything answers on :8420 and says plainly what
+         that does to the numbers.
+LESSON   A benchmark that does not control what else is on the machine is
+         measuring the machine's mood. The number looked plausible, which is
+         what made it dangerous - it nearly caused us to ship a lighter default
+         scenario to fix a problem that did not exist.
+
+--------------------------------------------------------------------------------
+BUG 25 - PERMISSION DENIED ON A FILE THAT PLAINLY EXISTED
+--------------------------------------------------------------------------------
+SYMPTOM  On the VM: `sudo: unable to execute /opt/sarathi/.venv/bin/python:
+         Permission denied`. The file was there and looked executable.
+CAUSE    Ubuntu has no Python 3.11, so uv downloaded one - and running as root,
+         it landed in /root/.local/share/uv/python. /root is mode 700. The venv
+         symlinked to an interpreter the unprivileged service user could not
+         traverse to, let alone execute.
+FIX      UV_PYTHON_INSTALL_DIR=/opt/uv/python, kept world-readable, and a check
+         that rebuilds a venv the service user cannot execute.
+LESSON   "Permission denied" on a path that exists usually means a directory
+         somewhere ABOVE it, not the file. The service would never have
+         started; the error surfaced in a benchmark step that ran first.
+
+--------------------------------------------------------------------------------
+BUG 26 - THE DEPLOY SCRIPT CLONED A BRANCH WITHOUT THE DEPLOY FILES
+--------------------------------------------------------------------------------
+SYMPTOM  `install: cannot stat '/opt/sarathi/deploy/sarathi.service': No such
+         file or directory`, several steps into an otherwise clean run.
+CAUSE    The script defaulted to cloning main, but the deployment files only
+         existed on the feature branch. Nothing said "wrong branch" - it failed
+         much later on a missing file, which reads as a packaging problem.
+FIX      Default to the branch the script is being run from, and check straight
+         after the clone that the files it needs are present, naming the branch
+         and the exact re-run command.
+LESSON   Fail at the cause, not at the first symptom downstream of it. The gap
+         between the two was about twenty lines of script and ten minutes of
+         confusion.
+
+
 ================================================================================
 PART 7 - PERFORMANCE ENGINEERING
 ================================================================================
@@ -1024,11 +1124,45 @@ THE GENERAL LESSON
   operation over all objects. We did not rewrite anything in C.
 
 
+WHY WE DO NOT RUN A SIMULATION PER VIEWER          (a good interview answer)
+  The obvious design for a multi-user demo is a world per visitor. We measured
+  it before assuming it. Stepping n sessions on n threads inside one process:
+
+    sessions in one process     1       2       3       4
+    mean step time            35 ms  119 ms  198 ms  292 ms
+
+  A second concurrent session does not halve the frame rate, it THIRDS it. The
+  stack is Python-level work, so the GIL serialises it and the thread-switching
+  overhead is charged on top. Threads buy nothing here; real concurrency would
+  mean one process per world, so one core per world.
+
+  That single measurement decided the whole architecture: ONE simulation,
+  broadcast to every viewer. It costs one core no matter how many are watching,
+  and an extra spectator costs 128 KiB/s of frames and no CPU at all. On the
+  free-tier VM the demo now runs on, that is the difference between working and
+  falling over at the second visitor.
+
+  The honest trade is in PART 11: everyone shares one world, so one visitor
+  changing scenario changes it for all of them.
+
+MEASURED ON THE DEPLOYED HARDWARE                 scripts/hostcheck.py
+  One Oracle Ampere A1 core, aarch64, service stopped so it is not competing
+  with itself (bug 24):
+
+    scenario                 step     p95    frame   budget   speed
+    village_road_unmarked   37.3ms  45.1ms   4.9ms    50 ms   1.00x
+    market_dense_mixed      49.0ms  58.8ms   4.2ms    50 ms   0.98x
+
+  So a single ARM core holds real time on the default scene, and the dense
+  market sits right on the boundary. The same script prints how many concurrent
+  worlds the machine has cores for, which is one.
+
+
 ================================================================================
 PART 8 - TESTING AND MEASUREMENT
 ================================================================================
 
-88 TESTS across five files (as pytest collects them):
+99 TESTS across six files (as pytest collects them):
   test_core.py          9   geometry, Frenet round-trips, kinematics
   test_perception.py   16   sensor models, association, merging, log-odds
   test_risk_field.py   11   kernel shapes, harm weighting, penetration
@@ -1161,8 +1295,16 @@ PACKAGING DETAILS WORTH KNOWING
     install stays small: `uv run --extra dev pytest`.
 
 THE LIVE DEMO ARCHITECTURE            sarathi/serve.py + assets/mission_control.html
-  * One process. A background thread serves the static HTML on port P; the
-    simulation runs and pushes frames over a websocket on port P+1.
+  * One process, ONE port. GET / returns the viewer; the same port upgrades to
+    a websocket at /ws; /healthz answers without starting a simulation. This
+    used to be two ports (P and P+1) - see bug 21 for why that could never have
+    worked behind TLS, and why collapsing it is what made the demo deployable.
+  * The page carries no host and no port. The viewer derives its own socket URL
+    from location, so the file is byte-identical on a laptop and behind someone
+    else's domain.
+  * ONE simulation, broadcast to every connected viewer. Not one per visitor -
+    see PART 7 for the measurement that decided that, and bug 22 for what the
+    naive version did.
   * The viewer is ONE HTML file with no build step and no dependencies. Nothing
     to install, nothing to compile, no node_modules on the demo path.
   * The SAME renderer serves two data sources: an embedded recorded run
@@ -1190,6 +1332,49 @@ FIGURE CAPTURE                        scripts/capture.py
   (behaviour in a set, path clearance above a threshold, speed above a
   threshold, enough elapsed time) before it takes the screenshot. So a figure
   in the deck is a moment we CHOSE, not a moment we happened to catch.
+
+DEPLOYMENT                                        deploy/, docs/05-hosting.md
+  The demo is live at sarathi.rishabhkushwaha.com on an Oracle always-free
+  Ampere A1 instance: systemd runs it on loopback, Caddy terminates TLS in
+  front with a certificate it obtains and renews itself.
+
+  WHY A VM AND NOT SERVERLESS - the argument, if asked
+    A session is a physics simulation holding 60-80% of a core continuously and
+    a websocket open for minutes. Lambda cannot hold the socket; it would need
+    API Gateway invoking a function per message, which at 20 Hz is 20
+    invocations per second per viewer. Between ticks the state is Kalman
+    covariances, a risk field and per-agent RNG streams - serialising and
+    restoring all of it every 50 ms exceeds the tick budget before any planning
+    happens. It is not a deployment change, it is a rewrite into an
+    architecture that would be slower and cost more than a free VM.
+
+  WHAT THE FREE TIER ACTUALLY IS
+    Oracle halved the always-free Ampere allowance in July 2026, unannounced,
+    from 4 OCPU / 24 GB to 2 OCPU / 12 GB - metered as 1,500 OCPU-hours and
+    9,000 GB-hours a month. It is billed on ALLOCATED time, not busy time.
+
+  TWO THINGS THAT COST HOURS AND ARE WORTH KNOWING
+    * Oracle reclaims an always-free instance whose CPU, network AND memory all
+      sit under 20% for seven days. The demo idles its pump when nobody is
+      watching, which put it exactly in that window - so the service runs with
+      --keep-warm, and the instance stays busy because the demo is genuinely
+      running.
+    * A certificate that will not issue is almost always the VCN security list,
+      which sits ABOVE the host firewall, denies by default, and reports
+      nothing to either side. Both layers must allow 80 and 443, and port 80 is
+      not optional even though traffic ends on 443 - that is where the ACME
+      challenge happens. deploy/diagnose.sh walks all four layers and names the
+      one that is blocking.
+
+  THE SCRIPTS
+    setup-oracle.sh  provision a fresh Ubuntu VM, idempotent
+    redeploy.sh      ship a change and restart, waiting on /healthz rather
+                     than trusting systemctl - a unit reports active well
+                     before the server is serving
+    diagnose.sh      which of the four layers is blocking
+    hostcheck.sh     can this machine hold 20 Hz (scripts/hostcheck.py)
+    share.sh         a public URL from any machine via a Cloudflare tunnel,
+                     for demoing off a laptop with no server at all
 
 GIT HYGIENE (a real lesson from this project)
   main once contained 38 .pyc files and no source, because a push went wrong.
@@ -1230,8 +1415,24 @@ PART 11 - WHAT IS STILL WRONG (say these before you are asked)
    MATLAB for exactly this reason.
 
 6. NO CI
-   There is no GitHub Actions workflow. 88 tests exist and pass locally. Do not
+   There is no GitHub Actions workflow. 99 tests exist and pass locally. Do not
    say "tests run in CI" - we had that sentence in a slide and removed it.
+
+7. EVERY VIEWER SHARES ONE WORLD
+   The hosted demo runs ONE simulation broadcast to everyone connected, so a
+   visitor who switches scenario switches it for every other visitor. For a
+   judged demo this is the point - one person places the obstacle and everyone
+   watches it happen live. For a public portfolio link it is a real annoyance.
+   It is not laziness: PART 7 has the measurement showing a second concurrent
+   session thirds the frame rate, and the free VM has one usable core, so a
+   world per visitor is not available at any amount of effort. The affordable
+   middle - first connection gets the controls, everyone else watches - is not
+   built yet.
+
+8. THE PUBLIC DEMO HAS NO AUTHENTICATION
+   Anyone who finds the URL can drag a cow into the road. There is no data to
+   leak and nothing to protect; the only real exposure is the CPU it burns,
+   which the systemd unit bounds with CPUQuota.
 
 
 ================================================================================
@@ -1284,7 +1485,7 @@ A: Bug 12. Tell the whole story: symptom, the rejection histogram, the two
    independent causes, the closed-form fix, and the 36% -> 43% result.
 
 Q: How did you test something like this?
-A: 88 tests, but the ones that matter are behavioural: every scenario spawns
+A: 99 tests, but the ones that matter are behavioural: every scenario spawns
    cleanly, every scenario is deterministic under a fixed seed, and the
    difficulty knob provably changes the scene. Plus a Monte-Carlo campaign
    against a baseline on identical seeds - which is what turns "it looked good"
@@ -1447,8 +1648,8 @@ PART 15 - TEN THINGS TO REMEMBER
     controllers.
 9.  43% route progress against the baseline's 36%, ahead on 8 of 10 scenarios -
     and 25/30 clean against its 27/30, which we volunteer rather than hide.
-10. The demo is live. Someone else places the obstacle. That is the whole
-    argument.
+10. The demo is live at sarathi.rishabhkushwaha.com, on one always-free ARM
+    core. Someone else places the obstacle. That is the whole argument.
 
 ================================================================================
 END
