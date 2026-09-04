@@ -257,6 +257,8 @@ class Simulator:
             neighbours=view.neighbours_of(agent.id),
             d_min=float(d_min), d_max=float(d_max),
             d_nominal=float(self.corridor.nominal_offset(s)),
+            d_nominal_opposing=float(self.corridor.opposing_offset(s)),
+            road_heading=float(self.corridor.reference.heading_at(s)),
             corridor_length=self.corridor.reference.length,
             speed_limit=self.corridor.comfortable_speed(agent.state.position,
                                                         agent.params.v_desired),

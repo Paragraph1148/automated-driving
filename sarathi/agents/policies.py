@@ -39,6 +39,16 @@ class PolicyContext:
     d_min: float
     d_max: float
     d_nominal: float
+    #: Preferred lateral offset for a road user travelling *against* the
+    #: reference direction: the centre of the other half of the road. Carried
+    #: explicitly rather than derived by mirroring ``d_nominal``, because
+    #: ``d_nominal`` is the *ego's* preferred side - mirroring it aims oncoming
+    #: traffic down the ego's own half.
+    d_nominal_opposing: float
+    #: Heading of the reference path at ``s``, radians in the world frame. What
+    #: a policy needs to aim *across* the road rather than along it - the Frenet
+    #: pair alone cannot express "turn back toward the carriageway".
+    road_heading: float
     corridor_length: float
     speed_limit: float
     dt: float
@@ -119,9 +129,7 @@ class OncomingPolicy(TrafficPolicy):
         super().__init__(**kwargs)
 
     def act(self, agent, ctx, rng):
-        mirrored = _mirror_context(ctx)
-        accel, steer = super().act(agent, mirrored, rng)
-        return accel, -steer
+        return super().act(agent, _mirror_context(ctx), rng)
 
 
 class WrongWayPolicy(TrafficPolicy):
@@ -166,7 +174,7 @@ class WrongWayPolicy(TrafficPolicy):
         # and rely on everyone else to make room, which is what they do.
         if mirrored.s_dot < self.crawl_speed and accel < 0.0:
             accel = max(accel, 0.35 * agent.params.a_max)
-        return accel, -steer
+        return accel, steer
 
 
 class RashDriverPolicy(TrafficPolicy):
@@ -203,41 +211,106 @@ class RashDriverPolicy(TrafficPolicy):
 
 
 class CattlePolicy(Policy):
-    """A cow in the carriageway.
+    """A cow in the carriageway - or a stray dog in it.
 
     The canonical Indian hazard, and the reason a single-hypothesis predictor is
-    inadequate. Alternates between grazing (stationary), ambling, and occasionally
-    changing its mind entirely. It does not model the ego at all - which is the
-    point. Everything about it is low-predictability by construction.
+    inadequate. Alternates between standing, lying down and not moving at all for
+    a long time, ambling, and changing its mind entirely. It does not model the
+    ego - which is the point. Everything about it is low-predictability by
+    construction.
+
+    Every command is expressed in the animal's **own** frame, because that is the
+    frame :func:`core.kinematics.step_holonomic` integrates. Driving the speed
+    error off ``ctx.s_dot`` - the component along the *road* - looks equivalent
+    and is not: an animal standing across the carriageway has ``s_dot`` near zero
+    whatever it is actually doing, so "stand still" was read as "you are already
+    stopped, carry on" and commanded full acceleration every tick. That is what
+    produced a herd which never once stood still and ran at its top speed.
     """
 
-    def __init__(self, wander: float = 0.6, stop_bias: float = 0.45):
+    #: How long each mode lasts, seconds. A cow that has sat down in the road is
+    #: the whole reason this class exists; it does not get up again after two
+    #: seconds, which is why the sit hold dwarfs the others.
+    SIT_HOLD = (10.0, 30.0)
+    STAND_HOLD = (3.0, 9.0)
+    AMBLE_HOLD = (1.5, 5.0)
+    #: Below this the animal is treated as stopped and brought fully to rest,
+    #: rather than creeping for ever on a residual command.
+    STILL_SPEED = 0.12
+
+    def __init__(self, wander: float = 0.6, stop_bias: float = 0.45,
+                 sit_bias: float = 0.4):
         self.wander = wander
         self.stop_bias = stop_bias
+        self.sit_bias = sit_bias
+
+    def _choose_mode(self, agent: Agent,
+                     rng: np.random.Generator) -> tuple[str, tuple[float, float]]:
+        if rng.random() >= self.stop_bias:
+            return "amble", self.AMBLE_HOLD
+        # Only cattle lie down. A stray dog stops, looks, and is gone again;
+        # giving one a half-minute sit would park a dog in the road all run.
+        if agent.cls is AgentClass.CATTLE and rng.random() < self.sit_bias:
+            return "sit", self.SIT_HOLD
+        return "stand", self.STAND_HOLD
 
     def act(self, agent, ctx, rng):
         mem = agent.memory
         mem.setdefault("until", -1.0)
-        mem.setdefault("mode", "graze")
-        mem.setdefault("lat", 0.0)
+        mem.setdefault("mode", "stand")
+        mem.setdefault("aim", float(agent.state.heading))
+        mem.setdefault("target_speed", 0.0)
 
         if ctx.time >= mem["until"]:
-            mem["mode"] = "graze" if rng.random() < self.stop_bias else "amble"
-            mem["until"] = ctx.time + rng.uniform(1.5, 5.0)
-            mem["lat"] = float(rng.normal(0.0, self.wander))
+            mode, hold = self._choose_mode(agent, rng)
+            mem["mode"] = mode
+            mem["until"] = ctx.time + float(rng.uniform(*hold))
+            if mode == "amble":
+                # It picks a direction and holds it. Redrawing the lateral
+                # target every tick, as this did, is a random walk on
+                # *acceleration*, which integrates into a spin rather than into
+                # an animal crossing a road. Walking the heading instead keeps
+                # the herd wandering out of the verge and into the carriageway,
+                # which is the behaviour the cattle scenario is built on.
+                mem["aim"] = float(wrap_to_pi(
+                    agent.state.heading + rng.normal(0.0, self.wander)))
+                mem["target_speed"] = float(
+                    rng.uniform(0.3, 0.8 * agent.params.v_desired))
+            else:
+                mem["aim"] = float(agent.state.heading)
+                mem["target_speed"] = 0.0
 
-        target_speed = 0.0 if mem["mode"] == "graze" else \
-            float(rng.uniform(0.4, agent.params.v_desired))
-        accel = float(np.clip((target_speed - ctx.s_dot) * 1.2,
+        #: Read by the live viewer, so an animal that has settled in the road
+        #: can be drawn as settled. A cow lying in the carriageway that renders
+        #: identically to one walking is a hazard the operator cannot read.
+        mem["resting"] = mem["mode"] == "sit"
+
+        speed = float(agent.state.speed)
+        if mem["mode"] != "amble":
+            # Come to a genuine halt, and stay at it.
+            return float(np.clip(-speed / max(ctx.dt, 1e-3),
+                                 -agent.params.b_max, 0.0)), 0.0
+
+        accel = float(np.clip((mem["target_speed"] - speed) * 1.2,
                               -agent.params.b_comf, agent.params.a_max))
-        lat = float(np.clip(mem["lat"] - 0.8 * ctx.d_dot,
+
+        # Only the corridor edge has any authority over an animal. Turn it back
+        # in, rather than shoving it sideways: above walking pace
+        # ``step_holonomic`` folds a lateral command into the heading anyway, so
+        # a sideways shove is a turn with the radius left to chance.
+        aim = mem["aim"]
+        margin = agent.params.width / 2.0 + 0.5
+        if ctx.d > ctx.d_max - margin:
+            aim = ctx.road_heading - math.pi / 2.0
+        elif ctx.d < ctx.d_min + margin:
+            aim = ctx.road_heading + math.pi / 2.0
+
+        # ``step_holonomic`` turns the body at roughly ``lat / speed`` rad/s, so
+        # a turn rate proportional to the heading error needs the speed factor.
+        err = float(wrap_to_pi(aim - agent.state.heading))
+        lat = float(np.clip(1.5 * err * max(speed, 0.5),
                             -agent.params.lateral_agility,
                             agent.params.lateral_agility))
-        # Only the corridor edge has any authority over a cow.
-        if ctx.d > ctx.d_max - 0.5:
-            lat -= 2.0
-        if ctx.d < ctx.d_min + 0.5:
-            lat += 2.0
         return accel, lat
 
 
@@ -400,13 +473,28 @@ def _mirror_context(ctx: PolicyContext) -> PolicyContext:
 
     Mirroring ``s`` and ``d`` lets a single direction-agnostic NLB-IDM serve both
     directions of travel, instead of maintaining two near-duplicate models.
+
+    The mirrored frame needs **no sign correction on the way out**. A lateral
+    acceleration is returned in the ``+d`` direction of the frame it was computed
+    in, and ``_lateral_to_control`` reads that as the agent's own left. For an
+    agent facing backwards along the reference, ``+d`` mirrored *is* its own left
+    - the two mirrorings cancel. Negating the steer here (as this did) inverted
+    the lateral loop: the rider steered away from its target, saturated, spun,
+    and ended up pinned against the simulator's heading cone, crabbing sideways
+    down the road at 67 degrees to its direction of travel.
     """
     return PolicyContext(
         s=-ctx.s, d=-ctx.d, s_dot=-ctx.s_dot, d_dot=-ctx.d_dot,
         neighbours=[Neighbour(nb.id, nb.cls, -nb.s, -nb.d, -nb.s_dot, -nb.d_dot,
                               nb.half_length, nb.half_width)
                     for nb in ctx.neighbours],
-        d_min=-ctx.d_max, d_max=-ctx.d_min, d_nominal=-ctx.d_nominal,
+        d_min=-ctx.d_max, d_max=-ctx.d_min,
+        # The two preferences swap places along with everything else: this
+        # agent keeps to the opposing half, and the half it is opposed *by* is
+        # the ego's. Mirroring ``d_nominal`` onto itself was what sent oncoming
+        # traffic down the ego's side of the road.
+        d_nominal=-ctx.d_nominal_opposing, d_nominal_opposing=-ctx.d_nominal,
+        road_heading=float(wrap_to_pi(ctx.road_heading + math.pi)),
         corridor_length=ctx.corridor_length, speed_limit=ctx.speed_limit,
         dt=ctx.dt, time=ctx.time, ego=ctx.ego)
 

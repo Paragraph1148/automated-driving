@@ -152,6 +152,19 @@ class Corridor:
             return (d_min + d_max) / 2.0
         return (d_max / 2.0) if self.drive_side > 0 else (d_min / 2.0)
 
+    def opposing_offset(self, s: float | np.ndarray) -> np.ndarray:
+        """Preferred lateral offset for traffic travelling *against* the reference.
+
+        The centre of the *other* half of the road - what a driver coming the
+        other way keeps to. This is not the mirror image of
+        :meth:`nominal_offset`: mirroring the ego's own preference names the
+        ego's half, so oncoming traffic aims straight down the ego's side.
+        """
+        d_min, d_max = self.bounds_at(s)
+        if self.road_type == "one_way":
+            return (d_min + d_max) / 2.0
+        return (d_min / 2.0) if self.drive_side > 0 else (d_max / 2.0)
+
     # -- rendering / geometry --------------------------------------------
     def edges(self) -> tuple[np.ndarray, np.ndarray]:
         """Left and right boundary polylines as (N,2) world-frame arrays."""
