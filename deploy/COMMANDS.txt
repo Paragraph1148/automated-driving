@@ -214,6 +214,46 @@
 
 
 ------------------------------------------------------------------------------
+ 8b. A DOMAIN, AND A SECOND PROJECT
+------------------------------------------------------------------------------
+
+ DNS: one A record per hostname, all pointing at this box's public IP.
+
+     sarathi.example.org.  A  <public IP>
+     brahmo.example.org.   A  <public IP>
+
+ Names must resolve BEFORE reloading Caddy, or the certificate challenge fails
+ and Caddy backs off. Port 80 must stay open even though traffic ends on 443.
+
+ Give sarathi its real hostname (re-run with the domain as the argument):
+
+   [VM]     sudo ACME_EMAIL=you@example.org \
+                 SARATHI_BRANCH=claude/sarathi-hosting-options-ey26qa \
+                 bash deploy/setup-oracle.sh sarathi.example.org
+
+ Add another project — one file, one port, one reload:
+
+   [VM]     sudoedit /etc/caddy/sites.d/brahmo.caddy   # see deploy/caddy/
+            sudo caddy validate --config /etc/caddy/Caddyfile
+            sudo systemctl reload caddy
+
+ Never put sites in /etc/caddy/Caddyfile itself. It only imports sites.d/*.caddy,
+ and that is what keeps re-running setup from wiping out your other projects.
+
+ Certificates renew themselves. To watch one being issued:
+
+   [VM]     journalctl -u caddy -f
+
+ Free the core if a second project needs it — drop --keep-warm once something
+ else keeps the box non-idle (Oracle's idle test needs CPU AND network AND
+ memory all under 20% for seven days):
+
+   [VM]     free -m                                        # memory above 20%?
+            sudoedit /etc/systemd/system/sarathi.service   # remove --keep-warm
+            sudo systemctl daemon-reload && sudo systemctl restart sarathi
+
+
+------------------------------------------------------------------------------
  9. STAYING FREE
 ------------------------------------------------------------------------------
 

@@ -22,6 +22,9 @@ if ! command -v apt-get >/dev/null 2>&1; then
 fi
 
 DOMAIN="${1:-}"
+# Let's Encrypt uses this to warn about expiry problems. Optional but worth
+# setting on anything you intend to leave running: ACME_EMAIL=you@example.org
+ACME_EMAIL="${ACME_EMAIL:-}"
 REPO="${SARATHI_REPO:-https://github.com/Paragraph1148/automated-driving}"
 APP=/opt/sarathi
 
@@ -139,15 +142,46 @@ EOF
     exit 1
   fi
 fi
-# {$DOMAIN} with no domain becomes :80 — plain HTTP, no certificate attempted.
-cat >/etc/caddy/Caddyfile <<EOF
+# One file per site, so this box can host other projects and re-running this
+# script cannot wipe them out. The main Caddyfile is written once and then left
+# alone; sarathi owns only its own site file. See deploy/caddy/README.txt.
+mkdir -p /etc/caddy/sites.d
+if [ ! -f /etc/caddy/Caddyfile ] || ! grep -q 'sites\.d' /etc/caddy/Caddyfile; then
+  [ -f /etc/caddy/Caddyfile ] && cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak
+  cat >/etc/caddy/Caddyfile <<EOF
+# Global options, then one file per site in sites.d.
+# Do not add sites here — add /etc/caddy/sites.d/<project>.caddy instead.
+{
+${ACME_EMAIL:+	email $ACME_EMAIL}
+}
+
+import /etc/caddy/sites.d/*.caddy
+EOF
+fi
+
+# With no domain this becomes :80, which answers on the IP for a smoke test.
+# It also catches every unmatched hostname, so replace it with a real name
+# before adding a second project.
+cat >/etc/caddy/sites.d/sarathi.caddy <<EOF
 ${DOMAIN:-:80} {
 	encode zstd gzip
+
+	# The telemetry frames are ~13 KiB of JSON ten times a second and the
+	# connection stays open as long as someone is watching, so the proxy must
+	# not decide the stream has stalled and cut it.
 	reverse_proxy 127.0.0.1:8420 {
 		flush_interval -1
 	}
 }
 EOF
+
+# A bad config should not take the other projects down with it: validate first,
+# and reload rather than restart so a failure leaves the running config intact.
+if ! caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+  echo "caddy config did not validate; leaving the running config alone" >&2
+  caddy validate --config /etc/caddy/Caddyfile >&2 || true
+  exit 1
+fi
 systemctl enable --now caddy
 systemctl reload caddy || systemctl restart caddy
 

@@ -222,6 +222,54 @@ opening any port, which side-steps the Oracle firewall layers entirely.
 cloudflared tunnel --url http://localhost:8420
 ```
 
+## A permanent address, and more than one project
+
+A `trycloudflare.com` URL is deliberately disposable. For a link that outlives
+the terminal you need a domain, and that is the only part of this that costs
+money — about a dollar a month at the outside, once a year.
+
+**Buying it.** Cloudflare Registrar sells at cost: you pay the registry and
+ICANN fee with no markup, on renewals as well as registration, across 390-odd
+TLDs. That last part matters more than the first year's price — a domain you
+intend to keep is a renewal cost, not a purchase. The GitHub Student Developer
+Pack gives a free year (Namecheap `.me`, Name.com, `.tech`), which is worth
+taking, but check what year two costs before you print the name on anything.
+
+**Pointing it.** One A record per hostname, all to the same IP:
+
+    sarathi.example.org.  A  <public IP>
+    brahmo.example.org.   A  <public IP>
+
+Caddy obtains a certificate per hostname over HTTP-01, so there is no wildcard
+to configure and no DNS plugin to install. The names must resolve *before* the
+reload or the challenge fails and Caddy backs off and retries. Port 80 has to
+stay open for the challenge even though everything ends up on 443.
+
+**One file per site.** `/etc/caddy/Caddyfile` sets global options and does
+nothing else but `import /etc/caddy/sites.d/*.caddy`. `setup-oracle.sh` writes
+only `sites.d/sarathi.caddy`, so re-running it — or redeploying — cannot disturb
+the other projects on the box. Adding one is a file, a port and a reload:
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile   # before, always
+sudo systemctl reload caddy                          # keeps the old config if bad
+```
+
+`deploy/caddy/` has the template and the details.
+
+**What one OCPU actually holds.** Measured on the Ampere core: 37 ms of every
+50 ms tick on the default scene, and the service runs `--keep-warm`, so that is
+most of the core continuously. A second *quiet* project — a static site, a small
+API idle between requests — costs almost nothing. A second *busy* one contends,
+and both feel slow. Judge by what a project does at rest.
+
+Once a second always-on service exists, consider dropping `--keep-warm`. It
+exists only to keep Oracle from reclaiming an instance it reads as idle, and
+that test is CPU under 20% **and** network under 20% **and** memory under 20%,
+across seven days. Several services resident in memory usually clear the memory
+threshold by themselves, which gives back the core `--keep-warm` was spending.
+Check `free -m` before relying on it.
+
 **Changing the code afterwards.** `/opt/sarathi` is a checkout that
 `setup-oracle.sh` resets with `git reset --hard`, so it is not a place to edit:
 keep your own clone in `$HOME` and move changes across.

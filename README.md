@@ -237,7 +237,8 @@ docs/            architecture, problem statement, team plan, MATLAB bridge,
                  hosting
 deploy/          Dockerfile, compose, Caddyfile, systemd unit, Oracle setup,
                  redeploy (ship a change to a running host),
-                 COMMANDS.txt (every command, in the order you need them)
+                 COMMANDS.txt (every command, in the order you need them),
+                 caddy/ (one file per site, for sharing a box between projects)
 .devcontainer/   GitHub Codespaces, for hosting without a credit card
 ppt/             the SIH idea submission deck and the internal briefing
 artifacts/       benchmark.json and the figures the decks embed
