@@ -60,6 +60,23 @@ class RSSParams:
     min_standoff: float = 2.0
     #: A leader below this speed counts as stopped for the standoff rule.
     standoff_leader_speed: float = 1.0
+    #: Speed still permitted inside the standoff when a way past exists, m/s.
+    #:
+    #: The standoff used to clamp the cap to a hard zero here, which turned the
+    #: rule into the exact failure it was written to prevent. A kinematic
+    #: bicycle yaws at ``v tan(delta) / L``: at zero speed the steering has no
+    #: authority whatsoever, so a vehicle forbidden to move can never turn out
+    #: from behind the thing it is stopped behind. It waits instead - and a
+    #: parked car, a barricade or a cow that has sat down never moves. Measured
+    #: on village_road_unmarked before this: the ego stood still for 23-79% of
+    #: every run, in stretches of up to 32 seconds, and never once reached its
+    #: goal. Every single zero cap was this rule.
+    #:
+    #: A crawl restores the authority (1 m/s is ~15 deg/s of yaw) and gives up
+    #: nothing: the RSS term is still evaluated on the true gap and still
+    #: reaches zero on its own below about 0.45 m, so this can only ever govern
+    #: inside the standoff band, never at the point of contact.
+    standoff_crawl: float = 1.2
 
 
 #: Braking we may assume a leading agent is capable of. Assuming a leader can
@@ -168,6 +185,9 @@ class SafetySupervisor:
         cap = float("inf")
         binding: int | None = None
         reason = "clear"
+        #: Whether anywhere else on the carriageway is clear. Only the standoff
+        #: rule needs it, so it is computed at most once and only when asked.
+        escape: bool | None = None
 
         for tr in tracks:
             s, d = corridor.reference.to_frenet(tr.position)
@@ -194,8 +214,14 @@ class SafetySupervisor:
                                                       b_other)
                 why = "leader"
                 if v_along < p.standoff_leader_speed and gap < p.min_standoff:
-                    limit = 0.0
-                    why = "standoff"
+                    if escape is None:
+                        escape = self._lateral_escape(s_ego, d_ego, tracks,
+                                                      corridor, ego_half_width)
+                    # Hold at a dead stop only when there is genuinely nowhere
+                    # to go. Otherwise keep the crawl that gives the steering
+                    # any authority at all - see ``standoff_crawl``.
+                    limit = min(limit, p.standoff_crawl) if escape else 0.0
+                    why = "standoff" if escape else "boxed-in"
             if limit < cap:
                 cap, binding, reason = limit, tr.id, f"{why}:{tr.cls.value}"
 
@@ -216,6 +242,50 @@ class SafetySupervisor:
         if intervened:
             self.interventions += 1
         return SafetyVerdict(cap, allowed, binding, reason, intervened)
+
+    def _lateral_escape(self, s_ego: float, d_ego: float, tracks, corridor,
+                        ego_half_width: float) -> bool:
+        """Is there anywhere on this carriageway, beside where we are, to go?
+
+        Sampled across the hard corridor bounds at the ego's own arc length: an
+        offset counts as an escape if every track that could reach it is
+        laterally clear of it by this class's required margin. Deliberately a
+        question about the *road*, not about the plan - the supervisor must be
+        able to answer it without trusting anything upstream, which is the whole
+        reason it exists.
+        """
+        p = self.p
+        d_lo, d_hi = corridor.hard_bounds_at(s_ego)
+        lo, hi = float(d_lo) + ego_half_width, float(d_hi) - ego_half_width
+        if hi <= lo:
+            return False               # road narrower than the vehicle
+        near = []
+        for tr in tracks:
+            s, d = corridor.reference.to_frenet(tr.position)
+            ds = s - s_ego
+            if -2.0 <= ds <= ESCAPE_LOOKAHEAD:
+                need = p.mu_lateral + (p.mu_vru_bonus if tr.cls.is_vru else 0.0)
+                near.append((float(d), tr.width / 2.0 + ego_half_width + need))
+        for d_try in np.linspace(lo, hi, 13):
+            if abs(d_try - d_ego) < 0.15:
+                continue               # where we already are is not an escape
+            if all(abs(d_try - d) >= reach for d, reach in near):
+                return True
+        return False
+
+
+#: How far ahead an obstruction still blocks a lateral escape, metres.
+#:
+#: Deliberately short, and the shortness is the whole point. The test projects
+#: everything in this window onto a single lateral axis, so anything inside it
+#: is treated as though it were abreast of the vehicle. At 12 m that made a car
+#: 12 m ahead and a handcart 5 m ahead - 7 m and several seconds apart - fill
+#: the road between them and report no way through, on a carriageway with 1.7 m
+#: of clear space beside the handcart. Six metres is about the distance covered
+#: before the next decision at the crawl this gates, so what it collapses
+#: together really is roughly abreast. Anything further off is still governed by
+#: the RSS longitudinal term on the approach, and enters this window in time.
+ESCAPE_LOOKAHEAD = 6.0
 
 
 def _tangent(corridor, s: float) -> np.ndarray:
