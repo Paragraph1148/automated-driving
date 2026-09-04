@@ -281,10 +281,17 @@
  10. WHEN IT BREAKS
 ------------------------------------------------------------------------------
 
- Demo unreachable from outside, fine from the VM:
-   - VCN security list ingress rule for 80/443 (section 8)
-   - sudo iptables -L INPUT -n --line-numbers     # host firewall
-   - sudo systemctl status caddy
+ Demo unreachable from outside, fine from the VM — run the diagnostic, it
+ walks all four layers and names the one that is broken:
+
+   [VM]     sudo bash deploy/diagnose.sh
+
+ A certificate that will not issue is nearly always the VCN security list:
+ it sits above the host firewall, blocks by default, and reports nothing.
+ Let's Encrypt allows 5 failed attempts per hostname per hour (one back every
+ 12 minutes), so fix the cause before retrying rather than looping.
+
+   [VM]     sudo systemctl restart caddy && journalctl -u caddy -f
 
  Page loads but stays "disconnected" in the corner:
    That is the WebSocket. Check the proxy passes upgrades, and that the page
