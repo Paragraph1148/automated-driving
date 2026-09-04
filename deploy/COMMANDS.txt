@@ -1,0 +1,312 @@
+==============================================================================
+ SARATHI — every command, in the order you need them
+ repo:   github.com/Paragraph1148/automated-driving
+ branch: claude/sarathi-hosting-options-ey26qa
+ host:   Oracle Cloud, Ampere A1, Ubuntu, systemd service "sarathi" on :8420
+==============================================================================
+
+ Two machines are involved and mixing them up is the main way to waste an hour:
+
+   LAPTOP  your own machine. Nothing runs here permanently.
+   VM      the Oracle box. The demo runs here as a systemd service, always.
+
+ Every command below is marked [LAPTOP] or [VM].
+
+
+------------------------------------------------------------------------------
+ 1. THE TWO YOU ACTUALLY NEED
+------------------------------------------------------------------------------
+
+ Deploy a change that is already pushed to the branch:
+
+   [VM]     cd ~/automated-driving && git pull
+            sudo bash deploy/redeploy.sh
+
+ Share a public URL for the running demo:
+
+   [VM]     cloudflared tunnel --url http://localhost:8420
+
+            Prints https://<random>.trycloudflare.com — send that to anyone.
+            Ctrl-C ends it. Run it inside tmux or it dies with your SSH session.
+
+ If Caddy and a domain are set up, you do not need the tunnel at all — the
+ demo is already at your domain over HTTPS and stays there.
+
+
+------------------------------------------------------------------------------
+ 2. DAY TO DAY ON THE VM
+------------------------------------------------------------------------------
+
+ tmux, so nothing dies when SSH drops:
+
+   [VM]     tmux new -s sarathi          # start
+            tmux attach -t sarathi       # come back to it
+            Ctrl-b d                     # detach, leave it running
+            Ctrl-b c / Ctrl-b n          # new window / next window
+
+ Service control:
+
+   [VM]     sudo systemctl status sarathi
+            sudo systemctl restart sarathi
+            sudo systemctl stop sarathi        # frees the core
+            sudo systemctl start sarathi
+            journalctl -u sarathi -f           # live logs
+
+ Is it actually serving? ("active" is not the same as "working")
+
+   [VM]     curl -s localhost:8420/healthz     # expect: ok
+            curl -sI localhost:8420/           # expect: 200, text/html
+            curl -sI localhost/                # through Caddy, if installed
+
+ Deploy variants:
+
+   [VM]     sudo bash deploy/redeploy.sh                          # pull + restart
+            sudo bash deploy/redeploy.sh --ref main               # a different ref
+            sudo bash deploy/redeploy.sh --from ~/automated-driving  # uncommitted
+
+   --from ships your working tree as-is. Good for iterating, but what is
+   deployed is then not a commit anyone can reproduce. Push when it works.
+
+ Roll back if a deploy goes wrong (redeploy.sh prints the exact command with
+ the real hash when it fails):
+
+   [VM]     sudo git -C /opt/sarathi reset --hard <old-sha>
+            sudo systemctl restart sarathi
+
+
+------------------------------------------------------------------------------
+ 3. NEVER EDIT /opt/sarathi
+------------------------------------------------------------------------------
+
+ /opt/sarathi is the deployment. setup-oracle.sh resets it with git reset
+ --hard, which destroys uncommitted work there without asking.
+
+ Your clone lives in ~/automated-driving. Edit there, deploy across with
+ redeploy.sh. Keep them separate.
+
+
+------------------------------------------------------------------------------
+ 4. RUNNING THE DEMO BY HAND
+------------------------------------------------------------------------------
+
+   [BOTH]   uv run sarathi serve                     # localhost only, :8420
+            uv run sarathi serve --port 9000
+            uv run sarathi serve --scenario market_dense_mixed
+            uv run sarathi serve --host 0.0.0.0      # reachable from outside
+            uv run sarathi serve --keep-warm         # keep running unwatched
+
+   --keep-warm is what the VM's service uses. Oracle deletes an Always Free
+   instance whose CPU, network AND memory all sit under 20% for seven days,
+   and an unvisited demo would sit exactly there.
+
+ Stop the service first, or the port is taken:
+
+   [VM]     sudo systemctl stop sarathi && uv run sarathi serve --port 8420
+
+ Other commands:
+
+   [BOTH]   uv run sarathi list                          # the ten scenarios
+            uv run sarathi run village_road_unmarked     # one headless run
+            uv run sarathi run all --chaos 0.7
+            uv run sarathi run all --controller baseline
+            uv run sarathi run market_dense_mixed --record run.json
+            uv run sarathi replay run.json -o page.html  # shareable replay
+
+
+------------------------------------------------------------------------------
+ 5. SHARING A PUBLIC URL
+------------------------------------------------------------------------------
+
+ From the VM, where the service is already running — tunnel to it:
+
+   [VM]     cloudflared tunnel --url http://localhost:8420
+
+ From your laptop, where nothing is running — one command does both:
+
+   [LAPTOP] ./scripts/share.sh
+            ./scripts/share.sh --port 9000 --scenario market_dense_mixed
+
+   It fetches cloudflared if missing, starts the demo, opens the tunnel,
+   prints the URL, and checks the tunnel is actually reachable — some campus
+   networks block it, and you want to find that out now, not on demo day.
+
+   If a demo is already serving on that port it tunnels to that one instead
+   of starting a second, so it is safe to run on the VM too.
+
+ For demo day the laptop is usually the better machine: a faster CPU than the
+ free VM, and no round trip to the cloud for a judge standing next to you.
+
+
+------------------------------------------------------------------------------
+ 6. MEASURING THIS MACHINE
+------------------------------------------------------------------------------
+
+ Can this box hold 20 Hz? Stop the service first or you are timing the demo
+ competing with itself for the one core — with --keep-warm it is holding that
+ core continuously, so the numbers come out roughly half of the truth:
+
+   [VM]     sudo systemctl stop sarathi
+            cd ~/automated-driving && uv run python scripts/hostcheck.py
+            sudo systemctl start sarathi
+
+ Reproduce the published numbers (heavy — minutes, and pins the CPU):
+
+   [LAPTOP] uv run python scripts/benchmark.py --seeds 3
+
+ Tests:
+
+   [BOTH]   uv run --extra dev pytest              # 99 tests
+            uv run --extra dev pytest -q tests/test_serve.py
+
+
+------------------------------------------------------------------------------
+ 7. GIT
+------------------------------------------------------------------------------
+
+   [BOTH]   git status
+            git add -A
+            git commit -m "what changed and why"
+            git push origin claude/sarathi-hosting-options-ey26qa
+            git pull
+
+ SSH key for GitHub, per machine (never copy a private key between machines):
+
+   [VM]     ssh-keygen -t ed25519 -C "sarathi-vm" -f ~/.ssh/id_ed25519
+            cat ~/.ssh/id_ed25519.pub      # paste at github.com/settings/keys
+            ssh -T git@github.com          # expect "successfully authenticated"
+
+ gh CLI:
+
+   [VM]     gh auth login                  # SSH, device code, works headless
+            gh pr create --fill
+            gh pr status
+
+
+------------------------------------------------------------------------------
+ 8. REBUILDING THE VM FROM NOTHING
+------------------------------------------------------------------------------
+
+ If the instance is lost or reclaimed, from a fresh Ubuntu VM:
+
+   [LAPTOP] scp -i <key> deploy/setup-oracle.sh ubuntu@<new-ip>:
+            ssh -i <key> ubuntu@<new-ip> \
+              'sudo SARATHI_BRANCH=claude/sarathi-hosting-options-ey26qa \
+                    bash setup-oracle.sh'
+
+ SARATHI_BRANCH matters until this work is merged to main: run from a copy of
+ the script on its own, it defaults to main, and main has no deploy/ directory.
+ Run from inside a clone it uses that clone's branch and you can omit it.
+
+ Add a domain as the last argument for automatic HTTPS:
+
+   [VM]     sudo SARATHI_BRANCH=claude/sarathi-hosting-options-ey26qa \
+                 bash deploy/setup-oracle.sh my.domain
+
+ Then, in the Oracle console — the one step no script can do:
+
+   Networking > Virtual Cloud Networks > your VCN > Security Lists > Default
+   Add ingress: source 0.0.0.0/0, TCP, destination ports 80 and 443
+
+ Pick Ubuntu 24.04 LTS (not the newest release, not Minimal): Caddy's apt
+ repository lags new Ubuntu releases and Minimal images omit tooling.
+
+ The instance also needs a PUBLIC IPv4 ADDRESS. The wizard will happily create
+ one without, and then nothing can reach it, SSH included.
+
+
+------------------------------------------------------------------------------
+ 8b. A DOMAIN, AND A SECOND PROJECT
+------------------------------------------------------------------------------
+
+ DNS: one A record per hostname, all pointing at this box's public IP.
+
+     sarathi.example.org.  A  <public IP>
+     brahmo.example.org.   A  <public IP>
+
+ Names must resolve BEFORE reloading Caddy, or the certificate challenge fails
+ and Caddy backs off. Port 80 must stay open even though traffic ends on 443.
+
+ Give sarathi its real hostname (re-run with the domain as the argument):
+
+   [VM]     sudo ACME_EMAIL=you@example.org \
+                 SARATHI_BRANCH=claude/sarathi-hosting-options-ey26qa \
+                 bash deploy/setup-oracle.sh sarathi.example.org
+
+ Add another project — one file, one port, one reload:
+
+   [VM]     sudoedit /etc/caddy/sites.d/brahmo.caddy   # see deploy/caddy/
+            sudo caddy validate --config /etc/caddy/Caddyfile
+            sudo systemctl reload caddy
+
+ Never put sites in /etc/caddy/Caddyfile itself. It only imports sites.d/*.caddy,
+ and that is what keeps re-running setup from wiping out your other projects.
+
+ Certificates renew themselves. To watch one being issued:
+
+   [VM]     journalctl -u caddy -f
+
+ Free the core if a second project needs it — drop --keep-warm once something
+ else keeps the box non-idle (Oracle's idle test needs CPU AND network AND
+ memory all under 20% for seven days):
+
+   [VM]     free -m                                        # memory above 20%?
+            sudoedit /etc/systemd/system/sarathi.service   # remove --keep-warm
+            sudo systemctl daemon-reload && sudo systemctl restart sarathi
+
+
+------------------------------------------------------------------------------
+ 9. STAYING FREE
+------------------------------------------------------------------------------
+
+ Always Free Ampere is 2 OCPU and 12 GB TOTAL, metered as 1,500 OCPU-hours and
+ 9,000 GB-hours a month. One 2 OCPU / 12 GB instance running all month spends
+ 1,488 and 8,928 of them. It fits with about 1% to spare, and it is billed on
+ allocated time, not busy time — so a second instance spun up "just to test"
+ for an afternoon puts you over.
+
+   Run one instance. Nothing else.
+
+ Check what you are being charged for:
+
+   Billing > Cost Analysis, group by service.
+
+ The usual surprise is orphaned boot volumes from instances you deleted:
+
+   Storage > Block Volumes — delete any not attached to a live instance.
+
+ Set a budget alert: Billing > Budgets, a small amount, alert at 50%.
+
+
+------------------------------------------------------------------------------
+ 10. WHEN IT BREAKS
+------------------------------------------------------------------------------
+
+ Demo unreachable from outside, fine from the VM — run the diagnostic, it
+ walks all four layers and names the one that is broken:
+
+   [VM]     sudo bash deploy/diagnose.sh
+
+ A certificate that will not issue is nearly always the VCN security list:
+ it sits above the host firewall, blocks by default, and reports nothing.
+ Let's Encrypt allows 5 failed attempts per hostname per hour (one back every
+ 12 minutes), so fix the cause before retrying rather than looping.
+
+   [VM]     sudo systemctl restart caddy && journalctl -u caddy -f
+
+ Page loads but stays "disconnected" in the corner:
+   That is the WebSocket. Check the proxy passes upgrades, and that the page
+   was loaded over the same origin the socket is on. Behind HTTPS the socket
+   must be wss:// — the viewer derives that from the page automatically, so a
+   failure here usually means something in front is stripping the upgrade.
+
+ Everything runs but the world crawls:
+   One Ampere core. Run hostcheck.py (section 6). Serve a lighter scenario:
+     sudo systemctl stop sarathi
+     # edit /etc/systemd/system/sarathi.service, add:
+     #   --scenario cattle_crossing
+     sudo systemctl daemon-reload && sudo systemctl start sarathi
+
+ Instance vanished:
+   Oracle reclaimed it as idle. --keep-warm exists to prevent this; confirm
+   the service is running with it:
+     grep ExecStart /etc/systemd/system/sarathi.service

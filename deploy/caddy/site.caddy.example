@@ -1,0 +1,29 @@
+# /etc/caddy/sites.d/<project>.caddy
+#
+# One file per project. Copy, rename, edit the hostname and the port.
+# Caddy obtains and renews the certificate for the hostname by itself.
+
+brahmo.example.org {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:8421
+}
+
+# A project that streams — WebSockets, server-sent events, long polling — needs
+# the proxy to stop buffering, or the connection looks stalled and gets cut.
+# Sarathi's own site file uses this; most projects do not need it.
+#
+# sarathi.example.org {
+# 	encode zstd gzip
+# 	reverse_proxy 127.0.0.1:8420 {
+# 		flush_interval -1
+# 	}
+# }
+
+# Serving files instead of proxying a process:
+#
+# notes.example.org {
+# 	root * /srv/notes
+# 	file_server
+# 	encode zstd gzip
+# }

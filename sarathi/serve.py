@@ -1,7 +1,13 @@
 """Live interactive server.
 
-    python -m sarathi serve
-    # then open http://localhost:8420
+    python -m sarathi serve                    # then open http://localhost:8420
+    python -m sarathi serve --host 0.0.0.0     # reachable from off the machine
+
+The page and the telemetry socket share one port: the browser asks for ``/`` and
+gets Mission Control, then upgrades ``/ws`` on the same origin. That is one
+listener to expose, one certificate to terminate and one ``proxy_pass`` to
+write, which is what makes the demo deployable behind Caddy, an nginx or a
+Cloudflare tunnel without a second hostname. See docs/05-hosting.md.
 
 Runs the **real** planning stack in real time and streams it to the browser, so a
 judge can drop a two-wheeler in front of the vehicle with the mouse and watch the
@@ -19,8 +25,7 @@ import asyncio
 import json
 import threading
 import time
-from functools import partial
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http import HTTPStatus
 
 from .core.types import AgentClass
 from .paths import scenario_dir, viewer_template
@@ -172,130 +177,224 @@ def _scene_payload(corridor) -> dict:
     return Recorder._describe_scene(corridor)
 
 
-async def _pump(session: LiveSession, websocket) -> None:
-    """Step the simulation on a wall clock and stream every other tick."""
-    dt = session.sim.dt
-    tick = 0
-    next_at = time.perf_counter()
-    while True:
-        session.step()
-        tick += 1
-        if tick % 2 == 0:
-            try:
-                await websocket.send(json.dumps(session.frame()))
-            except Exception:
-                return
-        next_at += dt / max(session.rate, 0.05)
-        delay = next_at - time.perf_counter()
-        if delay > 0:
-            await asyncio.sleep(delay)
-        else:
-            next_at = time.perf_counter()
-            await asyncio.sleep(0)
 
 
-async def _handle(session: LiveSession, websocket) -> None:
+class LiveServer:
+    """One simulation, one clock, however many browsers are watching.
+
+    Every viewer drives and observes the *same* world. That is partly the point
+    of the demo — two people can interfere with one scene at once — but it is
+    also the only affordable arrangement. Stepping the stack costs 30-40 ms of a
+    single core per 50 ms tick and the work is Python-level, so the GIL pins it
+    to one thread: measured on four threads, a second concurrent session does
+    not halve the frame rate, it *thirds* it. A session per viewer would take a
+    free-tier VM down at the second visitor. One session broadcast to everyone
+    costs one core no matter how many are connected, and an extra spectator
+    costs only their ~125 KiB/s of frames.
+
+    The pump therefore belongs to the server, not to the connection. Attaching
+    it to the connection — as this did — meant N browsers stepped the world N
+    times per wall second, so the simulation ran at N x speed and the vehicle
+    appeared to teleport as soon as a second person opened the page.
+    """
+
+    def __init__(self, session: LiveSession, keep_warm: bool = False):
+        self.session = session
+        self.keep_warm = keep_warm
+        self.clients: set = set()
+        self._pump: asyncio.Task | None = None
+
+    def start(self) -> None:
+        """Begin stepping before anyone has connected, if asked to stay warm."""
+        if self.keep_warm and self._pump is None:
+            self._pump = asyncio.create_task(self._drive())
+
+    def attach(self, websocket) -> None:
+        self.clients.add(websocket)
+        if self._pump is None:
+            self._pump = asyncio.create_task(self._drive())
+
+    def detach(self, websocket) -> None:
+        self.clients.discard(websocket)
+        if not self.clients and self._pump is not None and not self.keep_warm:
+            # Nobody is watching, so stop burning the core: on a laptop, or
+            # anywhere CPU is metered, an idle demo pinning a core looks
+            # identical to a runaway one.
+            self._pump.cancel()
+            self._pump = None
+
+    async def _drive(self) -> None:
+        """Step the simulation on a wall clock and stream every other tick."""
+        dt = self.session.sim.dt
+        tick = 0
+        next_at = time.perf_counter()
+        while True:
+            self.session.step()
+            if self.keep_warm and self.session.sim.finished:
+                # A warm world that has driven its route to the end stops being
+                # a warm world. Put the vehicle back on the road and let it run,
+                # so the first visitor arrives at something already moving.
+                self.session.restart_ego()
+            tick += 1
+            if tick % 2 == 0:
+                await self.broadcast(self.session.frame())
+            next_at += dt / max(self.session.rate, 0.05)
+            delay = next_at - time.perf_counter()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            else:
+                # Behind real time — on a slower core this is the normal state.
+                # Re-anchor rather than trying to catch up, so the world runs in
+                # slow motion instead of spiralling into a burst of steps.
+                next_at = time.perf_counter()
+                await asyncio.sleep(0)
+
+    async def broadcast(self, payload: dict) -> None:
+        """Serialise once, send to everyone: the frame is ~13 KiB of JSON."""
+        if not self.clients:
+            return
+        payload["viewers"] = len(self.clients)
+        raw = json.dumps(payload)
+        await asyncio.gather(*(self._send(ws, raw) for ws in tuple(self.clients)),
+                             return_exceptions=True)
+
+    async def _send(self, websocket, raw: str) -> None:
+        try:
+            await websocket.send(raw)
+        except Exception:
+            # Drop the dead socket but leave the pump alone; the connection's
+            # own handler runs detach() and decides whether anyone is left.
+            self.clients.discard(websocket)
+
+
+async def _handle(server: LiveServer, websocket) -> None:
+    session = server.session
     await websocket.send(json.dumps({"meta": session.meta()}))
-    pump = asyncio.create_task(_pump(session, websocket))
+    server.attach(websocket)
     try:
         async for raw in websocket:
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 continue
-            cmd = msg.get("cmd")
-            if cmd == "place":
-                session.place(msg["cls"], msg["x"], msg["y"],
-                              msg.get("policy"), msg.get("speed"))
-            elif cmd == "remove":
-                session.remove(msg["x"], msg["y"])
-            elif cmd == "grab":
-                found = session.grab(msg.get("id"), msg.get("x", 0.0),
-                                     msg.get("y", 0.0))
-                await websocket.send(json.dumps({"grabbed": found}))
-            elif cmd == "drag":
-                session.drag(int(msg["id"]), msg["x"], msg["y"])
-            elif cmd == "drop":
-                session.drop(int(msg["id"]))
-            elif cmd == "pause":
-                session.paused = bool(msg.get("value", True))
-            elif cmd == "rate":
-                session.rate = float(msg.get("value", 1.0))
-            elif cmd == "restart_ego":
-                session.restart_ego()
-            elif cmd == "set":
-                try:
-                    value = session.tune(msg["key"], msg["value"])
-                except KeyError:
-                    continue
-                await websocket.send(json.dumps(
-                    {"tuned": {"key": msg["key"], "value": value}}))
-            elif cmd == "reset_tuning":
-                await websocket.send(json.dumps(
-                    {"values": session.reset_tuning()}))
-            elif cmd == "load":
-                session.load(msg["scenario"], msg.get("chaos"), msg.get("seed"))
-                await websocket.send(json.dumps({"meta": session.meta()}))
+            try:
+                await _command(server, session, websocket, msg)
+            except Exception as exc:
+                # A public demo takes messages from whoever opens the page, so a
+                # malformed one must cost that command and nothing else. Before
+                # this, an unknown agent class or a missing scenario closed the
+                # socket with a 1011 and every viewer's page went dark. Reported
+                # rather than swallowed, so journalctl still shows real bugs.
+                print(f"  ignored {msg.get('cmd')!r}: "
+                      f"{type(exc).__name__}: {exc}", flush=True)
     finally:
-        pump.cancel()
+        server.detach(websocket)
 
 
-def _live_page(port: int) -> bytes:
+async def _command(server: LiveServer, session: LiveSession, websocket,
+                   msg: dict) -> None:
+    """Apply one browser command to the shared world."""
+    cmd = msg.get("cmd")
+    if cmd == "place":
+        session.place(msg["cls"], msg["x"], msg["y"],
+                      msg.get("policy"), msg.get("speed"))
+    elif cmd == "remove":
+        session.remove(msg["x"], msg["y"])
+    elif cmd == "grab":
+        found = session.grab(msg.get("id"), msg.get("x", 0.0), msg.get("y", 0.0))
+        await websocket.send(json.dumps({"grabbed": found}))
+    elif cmd == "drag":
+        session.drag(int(msg["id"]), msg["x"], msg["y"])
+    elif cmd == "drop":
+        session.drop(int(msg["id"]))
+    elif cmd == "pause":
+        session.paused = bool(msg.get("value", True))
+    elif cmd == "rate":
+        session.rate = float(msg.get("value", 1.0))
+    elif cmd == "restart_ego":
+        session.restart_ego()
+    elif cmd == "set":
+        value = session.tune(msg["key"], msg["value"])
+        await websocket.send(json.dumps(
+            {"tuned": {"key": msg["key"], "value": value}}))
+    elif cmd == "reset_tuning":
+        await server.broadcast({"values": session.reset_tuning()})
+    elif cmd == "load":
+        # Everyone is in this world, so everyone is told it changed.
+        session.load(msg["scenario"], msg.get("chaos"), msg.get("seed"))
+        await server.broadcast({"meta": session.meta()})
+
+
+def _live_page() -> bytes:
     """Render the shared viewer template in live mode.
 
     The same template serves the recorded artifact and this page; only the
     injected payload differs, so the demo a judge drives and the page shared
     afterwards cannot drift apart. Rendered in memory rather than written to
     disk, because an installed package's directory may not be writable.
+
+    The viewer derives its own socket URL from ``location``, so the page carries
+    no host or port and is byte-identical whether it is served from a laptop on
+    :8420 or from behind TLS on someone else's domain.
     """
-    payload = json.dumps({"mode": "live", "port": port})
+    payload = json.dumps({"mode": "live"})
     return viewer_template().replace("__RUN_DATA__", payload).encode("utf-8")
 
 
-class _PageHandler(BaseHTTPRequestHandler):
-    """Serves exactly one page, with an explicit charset.
+def _http_routes(page: bytes):
+    """Answer plain HTTP on the socket that also carries the telemetry.
 
-    The charset is not optional: without it the browser falls back to latin-1 and
-    every em dash and infinity sign in the telemetry renders as mojibake.
+    Returning ``None`` lets the WebSocket handshake proceed; returning a
+    response serves the request and closes. The explicit charset is not
+    optional: without it the browser falls back to latin-1 and every em dash and
+    infinity sign in the telemetry renders as mojibake.
     """
+    from websockets.datastructures import Headers
+    from websockets.http11 import Response
 
-    page: bytes = b""
+    def process_request(connection, request):
+        path = request.path.split("?", 1)[0]
+        if path == "/ws":
+            return None
+        if path == "/healthz":
+            # A body a load balancer, a systemd healthcheck or an uptime pinger
+            # can read without opening a socket and pinning the core.
+            return connection.respond(HTTPStatus.OK, "ok\n")
+        if path in ("/", "/index.html", "/live.html"):
+            return Response(200, "OK", Headers({
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Length": str(len(page)),
+                "Cache-Control": "no-store"}), page)
+        return connection.respond(HTTPStatus.NOT_FOUND, "not found\n")
 
-    def do_GET(self):
-        if self.path in ("/", "/index.html", "/live.html"):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(self.page)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(self.page)
-        else:
-            self.send_error(404)
-
-    def log_message(self, *args):
-        pass
-
-
-def _serve_static(port: int, page: bytes) -> None:
-    handler = type("_Bound", (_PageHandler,), {"page": page})
-    ThreadingHTTPServer(("127.0.0.1", port), handler).serve_forever()
+    return process_request
 
 
 def run(scenario: str = "village_road_unmarked", chaos: float | None = None,
         seed: int | None = None, port: int = 8420,
-        scenarios: str | None = None) -> None:
-    import websockets
+        scenarios: str | None = None, host: str = "127.0.0.1",
+        keep_warm: bool = False) -> None:
+    from websockets.asyncio.server import serve
 
     session = LiveSession(scenario, chaos, seed, scenarios)
-    threading.Thread(target=_serve_static, args=(port, _live_page(port)),
-                     daemon=True).start()
+    server = LiveServer(session, keep_warm=keep_warm)
 
-    print(f"\n  SARATHI live  →  http://localhost:{port}")
-    print(f"  scenario: {scenario}   chaos: {session.chaos:.2f}\n")
+    shown = "localhost" if host in ("127.0.0.1", "0.0.0.0", "::") else host
+    print(f"\n  SARATHI live  ->  http://{shown}:{port}")
+    print(f"  scenario: {scenario}   chaos: {session.chaos:.2f}")
+    if host == "0.0.0.0":
+        print("  listening on every interface")
+    if keep_warm:
+        print("  keeping the world running with nobody connected")
+    print()
 
     async def main():
-        async with websockets.serve(partial(_handle, session), "127.0.0.1",
-                                    port + 1, max_size=None):
+        async def handler(websocket):
+            await _handle(server, websocket)
+
+        server.start()
+        async with serve(handler, host, port, max_size=None,
+                         process_request=_http_routes(_live_page())):
             await asyncio.Future()
 
     try:

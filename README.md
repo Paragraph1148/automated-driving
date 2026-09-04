@@ -59,6 +59,25 @@ in the submission — which is the point. A recorded video invites the question
 "how do we know it isn't a replay?"; someone who places the obstacle themselves
 has already answered it.
 
+### Putting it on the internet
+
+```bash
+./scripts/share.sh
+```
+
+Serves the demo and opens a Cloudflare quick tunnel to it, printing an
+`https://…trycloudflare.com` URL anyone can open. No account, no card, no
+server — and it works only because the page and the telemetry socket share one
+port, so a single tunnel carries both and the viewer derives `wss://` from the
+page's own origin.
+
+For a link that outlives the terminal there is a Codespaces devcontainer, a
+Dockerfile, and a one-command Oracle setup script.
+**[docs/05-hosting.md](docs/05-hosting.md)** ranks the hosts by what they ask you
+to pay with, has the measurements behind the choice — a world costs most of a
+CPU core, a spectator costs 128 KiB/s and no CPU — and explains why a serverless
+runtime cannot serve this at all.
+
 ---
 
 ## Every command
@@ -67,12 +86,15 @@ has already answered it.
 uv run sarathi list                            # the ten scenarios
 uv run sarathi serve                           # live interactive demo
 uv run sarathi serve --scenario market_dense_mixed --port 9000
+uv run sarathi serve --host 0.0.0.0            # reachable from off the machine
 uv run sarathi run village_road_unmarked       # one headless run
 uv run sarathi run all --chaos 0.7             # every scenario, harder
 uv run sarathi run all --controller baseline   # the lane-following comparison
 uv run sarathi run market_dense_mixed --record run.json
 uv run sarathi replay run.json -o page.html    # shareable replay page
-uv run --extra dev pytest                      # 88 tests
+uv run --extra dev pytest                      # 99 tests
+uv run python scripts/hostcheck.py             # can this box hold 20 Hz?
+./scripts/share.sh                             # public URL via a tunnel
 ```
 
 `--chaos 0..1` is a single knob over the whole scene: wrong-way riders, driver
@@ -207,9 +229,17 @@ sarathi/          the stack — runs anywhere, no licence required
   assets/        the Mission Control viewer (one HTML file)
   serve.py       live interactive server
 scenarios/       *.yaml — one spec per scenario, shipped inside the package
-scripts/         benchmark.py (the evidence), capture.py (the figures)
-tests/           88 tests, including behavioural regressions
-docs/            architecture, problem statement, team plan, MATLAB bridge
+scripts/         benchmark.py (the evidence), capture.py (the figures),
+                 hostcheck.py (can this machine hold 20 Hz?),
+                 share.sh (a public URL in one command)
+tests/           99 tests, including behavioural regressions
+docs/            architecture, problem statement, team plan, MATLAB bridge,
+                 hosting
+deploy/          Dockerfile, compose, Caddyfile, systemd unit, Oracle setup,
+                 redeploy (ship a change to a running host),
+                 COMMANDS.txt (every command, in the order you need them),
+                 caddy/ (one file per site, for sharing a box between projects)
+.devcontainer/   GitHub Codespaces, for hosting without a credit card
 ppt/             the SIH idea submission deck and the internal briefing
 artifacts/       benchmark.json and the figures the decks embed
 ```
