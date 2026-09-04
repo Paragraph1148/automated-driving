@@ -150,6 +150,12 @@ class LiveSession:
                        "v": round(a.state.speed, 2),
                        "l": round(a.params.length, 2),
                        "w": round(a.params.width, 2)}
+                # Only when true, and only for animals that have one: a cow
+                # lying in the carriageway is a different hazard from one
+                # walking across it, and drawn identically the operator cannot
+                # tell them apart.
+                if a.memory.get("resting"):
+                    row["rest"] = 1
                 (ego_row.update(row) if a.id == ego.id else rows.append(row))
             debug = dict(sim.controller._debug_cache) \
                 if hasattr(sim.controller, "_debug_cache") else {}

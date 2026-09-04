@@ -1,3 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Without this the page is laid out at a 980px virtual viewport and scaled
+     down: a 390px phone reports window.innerWidth === 980, so the mobile
+     breakpoint below never fires and a phone gets the desktop two-column
+     layout at 40% size. The doctype matters for the same reason - the page
+     was rendering in quirks mode (document.compatMode === "BackCompat")
+     everywhere, phone and desktop alike. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SARATHI Mission Control</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -141,6 +150,30 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
   .app{grid-template-columns:1fr; grid-template-rows:auto minmax(280px,46vh) auto auto; height:auto}
   aside{max-height:none}
 }
+/* Phones. Until the viewport meta above existed none of this could fire: the
+   page was laid out at 980px and scaled down, so a 390px screen never met a
+   max-width query it was actually narrow enough for. */
+@media (max-width:640px){
+  body{font-size:15px}
+  header{padding:10px 14px; gap:10px}
+  /* The tagline costs a fifth of the screen to say what the wordmark and the
+     first tour card already say. */
+  .tagline{display:none}
+  .scenario{margin-left:0; width:100%; gap:14px}
+  .app{grid-template-rows:auto minmax(260px,42vh) auto auto}
+  aside{padding:14px 14px 20px; gap:16px}
+  .overlay{left:10px; bottom:10px; gap:6px}
+  .chip{font-size:11px; padding:4px 7px}
+  /* Touch targets. 11.5px type in a 7px-padded button is a 28px tap area. */
+  button{font-size:12.5px; padding:11px 14px; min-height:44px}
+  .palette{grid-template-columns:1fr 1fr; gap:8px}
+  .palette button{min-height:46px}
+  .layers label{padding:7px 0; min-height:34px}
+  .layers input{width:20px; height:20px}
+  .knob input[type=range]{height:28px}
+  footer{padding:9px 14px; gap:10px; flex-wrap:wrap}
+  footer .clock{font-size:12px}
+}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 
@@ -220,6 +253,7 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
         <div><span class="shape" style="background:var(--veh)"></span> Vehicles — car, bus, truck, auto</div>
         <div><span class="shape" style="background:var(--vru);height:6px"></span> Vulnerable — two-wheeler, cycle, pedestrian, cart</div>
         <div><span class="shape" style="background:var(--animal);height:8px"></span> Animals — cattle, stray dogs</div>
+        <div><span class="shape" style="background:var(--animal);height:8px;border-radius:6px"></span> …rounded: settled in the road</div>
         <div><span class="shape" style="background:var(--furniture);height:5px"></span> Static — barricades, parked</div>
       </div>
       <div style="margin-top:14px">
@@ -290,12 +324,25 @@ const cv = document.getElementById("bev"), ctx = cv.getContext("2d");
 let scale = 7, follow = true, playing = false, rate = 1, idx = 0, dpr = 1;
 const riskCanvas = document.createElement("canvas"); const riskCtx = riskCanvas.getContext("2d");
 
+// Metres of road the view tries to hold. In follow mode the ego heads right,
+// so the long axis carries distance ahead and the short axis carries the
+// carriageway's cross-section.
+const VIEW_ACROSS = 26;      // m of road width plus verge, vertically
+const VIEW_AHEAD_MAX = 95;   // m of road ahead on a wide screen
+const VIEW_AHEAD_MIN = 46;   // ...and on a narrow one
+
 function resize(){
   dpr = Math.min(window.devicePixelRatio || 1, 2);
   const r = cv.parentElement.getBoundingClientRect();
   cv.width = Math.max(1, r.width*dpr); cv.height = Math.max(1, r.height*dpr);
   cv.style.width = r.width+"px"; cv.style.height = r.height+"px";
-  scale = Math.max(4, Math.min(11, r.width/95));
+  // Scale from *both* axes. Deriving it from the width alone asked a phone to
+  // hold 95 m of road across 390 px, which drew a 4 m carriageway 17 px tall -
+  // too small to read and far too small to hit with a thumb. A narrow screen
+  // shows less road ahead instead of shrinking everything on it.
+  const ahead = Math.max(VIEW_AHEAD_MIN, Math.min(VIEW_AHEAD_MAX, r.width/8));
+  scale = Math.max(4, Math.min(11, Math.min(r.width/ahead,
+                                            r.height/VIEW_ACROSS)));
   draw();
 }
 window.addEventListener("resize", resize);
@@ -355,8 +402,22 @@ function drawRisk(f, T){
   ctx.restore();
 }
 
-function drawBody(T, x, y, h, len, wid, fill, ring, ringWidth){
+function drawBody(T, x, y, h, len, wid, fill, ring, ringWidth, resting){
   const hl = len/2, hw = wid/2, c = Math.cos(h), s = Math.sin(h);
+  const mid = T(x, y), nose = T(x + hl*c, y + hl*s);
+  if (resting){
+    // An animal that has settled in the road is drawn as a rounded body with
+    // no heading tick: it is not going anywhere, and a cow lying in the
+    // carriageway is a different hazard from one walking across it. T is a
+    // rigid transform with a uniform scale, so the screen angle comes straight
+    // from where the nose landed.
+    const ang = Math.atan2(nose[1]-mid[1], nose[0]-mid[0]);
+    ctx.beginPath();
+    ctx.ellipse(mid[0], mid[1], hl*scale, hw*scale, ang, 0, Math.PI*2);
+    ctx.fillStyle = fill; ctx.fill();
+    if (ring){ ctx.strokeStyle = ring; ctx.lineWidth = ringWidth||1.25; ctx.stroke(); }
+    return;
+  }
   const pts = [[hl,hw],[hl,-hw],[-hl,-hw],[-hl,hw]].map(([a,b]) =>
     T(x + a*c - b*s, y + a*s + b*c));
   ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
@@ -365,7 +426,6 @@ function drawBody(T, x, y, h, len, wid, fill, ring, ringWidth){
   ctx.fillStyle = fill; ctx.fill();
   if (ring){ ctx.strokeStyle = ring; ctx.lineWidth = ringWidth||1.25; ctx.stroke(); }
   // Heading tick, so direction of travel reads without animation.
-  const nose = T(x + hl*c, y + hl*s), mid = T(x, y);
   ctx.beginPath(); ctx.moveTo(mid[0],mid[1]); ctx.lineTo(nose[0],nose[1]);
   ctx.strokeStyle = ring || fill; ctx.lineWidth = 1; ctx.stroke();
 }
@@ -438,7 +498,8 @@ function draw(){
   if (on.truth) for (const a of f.agents){
     const held = heldIds.includes(a.id);
     drawBody(T, a.x, a.y, a.h, a.l, a.w, hueFor(a.cls),
-             held ? css("--accent") : css("--surface-1"), held ? 2.5 : 1);
+             held ? css("--accent") : css("--surface-1"), held ? 2.5 : 1,
+             !!a.rest);
     if (held){
       const c = T(a.x, a.y);
       ctx.beginPath(); ctx.arc(c[0], c[1], Math.max(14, 1.1*scale), 0, Math.PI*2);

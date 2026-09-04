@@ -79,6 +79,8 @@ class Recorder:
                 "l": round(a.params.length, 2),
                 "w": round(a.params.width, 2),
             }
+            if a.memory.get("resting"):
+                row["rest"] = 1
             if a.id == ego_id:
                 ego_row = row
             else:
