@@ -98,10 +98,93 @@ regression shows up as a number rather than as an argument.
 
 ---
 
-## Found while verifying, not yet scoped
+## P0.5 — The ego standing still  ⚠️ one bug fixed, root cause found, not solved
 
-**The ego barely drives, and this predates all of the above.** Measured over
-60 s on `village_road_unmarked`:
+The vehicle is stopped for 23-79% of a run and never reaches its goal on a
+~200 m road. This predates all the work above.
+
+### What was fixed
+
+The RSS **standoff** rule clamped the speed cap to a hard zero whenever the ego
+came within 2 m of a slow leader in its own track. A kinematic bicycle yaws at
+`v·tan(δ)/L`, so at zero speed the steering has no authority at all: a vehicle
+forbidden to move can never turn out from behind the thing it is stopped
+behind. It waits, and a parked car, a barricade or a cow that has sat down
+never moves. The rule produced precisely the wedged vehicle it was written to
+prevent.
+
+The cap now falls to a crawl when a way past exists and still to a dead stop
+when one does not. The RSS term is unchanged and still reaches zero on its own
+below ~0.45 m, so the crawl can only govern *inside* the standoff band, never at
+contact range. `tests/test_safety_standoff.py` pins both halves; the first test
+fails on the previous code. Zero speed caps per 1200 ticks on
+`village_road_unmarked`: **198 → 102** at chaos 0, **300 → 180** at chaos 0.35.
+
+### What it did not fix
+
+Over 60 benchmark runs each side:
+
+| | before | after |
+|---|---|---|
+| mean progress | 30.8% | 31.4% |
+| mean speed | 0.90 m/s | 0.95 m/s |
+| collision-free | 45/60 | 43/60 |
+
+A two-run difference in collisions, well inside one standard error at this
+sample size, and in the worse direction. **The safety layer was not what was
+holding the vehicle.** During a 30.4 s standstill it permits 0.98 m/s on
+average and binds at zero only 20% of the time.
+
+### The actual root cause
+
+Instrumented across 636 stopped ticks on `village_road_unmarked` at chaos 0.35:
+
+| stage | what it asks for | verdict |
+|---|---|---|
+| behaviour layer | **4.62 m/s** | wants to go |
+| lattice | ~19 feasible candidates, infeasible in **0%** of ticks | **selects one whose own speed profile is 0.045 m/s** |
+| safety supervisor | permits **0.98 m/s** | not binding 80% of the time |
+
+Nothing forbids the vehicle from moving. **It chooses a stop-in-place
+trajectory** out of nineteen feasible ones. The trajectory cost is
+
+```
+w_risk(12.0)·risk + w_speed(2.4)·speed_error + jerk + offset terms
+```
+
+so risk outweighs progress **5:1**. In dense traffic every trajectory that
+moves carries risk and standing still carries almost none, so standing still
+wins. Both weights are live sliders in the Thresholds panel
+(`plan.w_risk`, `plan.w_speed`).
+
+The clinching evidence that this is the wrong trade here: **in all 32
+collisions across both benchmark arms the ego was stationary at impact.** Not
+one was caused by the ego moving into something. It is struck while standing
+still — so on these roads, stopping is not the safe option, and the cost
+function is optimising for the wrong thing.
+
+A weight sweep (3 scenarios × 2 seeds each) points the same way:
+
+| `w_risk` | `w_speed` | progress | mean speed | collisions |
+|---|---|---|---|---|
+| 12.0 | 2.4 *(default)* | 23.9% | 0.93 m/s | 3/6 |
+| 8.0 | 4.0 | 24.5% | 0.97 m/s | 3/6 |
+| 6.0 | 6.0 | 24.4% | 0.64 m/s | 2/6 |
+| 4.0 | 8.0 | **30.3%** | 0.75 m/s | **1/6** |
+
+Biasing toward progress improved progress *and* reduced collisions. The sample
+is small and the collision counts are not significant on their own, but the
+direction matches the stationary-impact finding exactly.
+
+**Still open.** No configuration completes a scenario (0/6 everywhere), so the
+weights are not the whole story. Rebalancing them is a safety-policy decision
+rather than a bug fix, which is why it has not been made here.
+
+---
+
+## Appendix: how the standstill was first spotted
+
+Measured over 60 s on `village_road_unmarked`, before P0.5:
 
 | | before P0 | after P0 |
 |---|---|---|
@@ -124,6 +207,5 @@ at the planner failing to find a path:
 * and `path_clearance` is **negative in 37%** of stopped ticks — the chosen
   trajectory already overlaps something.
 
-That reads as a livelock: the vehicle is too close to move, and cannot stop
-being too close without moving. Worth a decision before P2, because a demo
-whose vehicle stands still undercuts every other fix here.
+That first read as a livelock in the safety layer. It was one - see P0.5 - but
+it was not the cause. The full chain is above.
