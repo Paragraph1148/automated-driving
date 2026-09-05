@@ -88,13 +88,41 @@ regression shows up as a number rather than as an argument.
 11. **A pulsing live dot**, because "live" as a grey 12 px word is the one claim
     on the page nobody takes at face value.
 
-## P2 — Mobile interaction  ⬜ not started
+## P2 — Mobile interaction  ✅ done
 
-12. Remove is shift-click, which does not exist on touch — needs an eraser mode
-    or a long-press.
-13. No zoom or pan on any device — pinch, wheel, and buttons.
-14. Phone layout: give the canvas the screen and move the controls into a
-    bottom sheet with Drop / Tune / Layers tabs.
+12. **Removing a road user** was shift-click, and no phone has a shift key.
+    Now: **hold** a road user for 550 ms to remove it, or turn on **Erase** and
+    tap. Shift-click still works. A press that wanders more than 12 px is a
+    drag, not a hold — a thumb is not a mouse.
+13. **Zoom and pan**, which did not exist on any device. Pinch, wheel, and a
+    button cluster; drag the empty road to pan. Zooming is anchored on the
+    cursor or the pinch midpoint, so the thing you are pointing at stays under
+    your finger. A chip shows the factor and the reset only appears once there
+    is something to reset.
+14. **Phone layout**: the road is `position: sticky` at the top and the
+    controls scroll under it — adjusting a threshold and watching what it does
+    to the vehicle is the point of the panel, and it is impossible if moving
+    the slider scrolls the road off screen. The rail is split into
+    Status / Drop / Tune / Layers behind a tab bar **fixed to the bottom of the
+    viewport**, because a bar that scrolls with the rail is gone exactly when
+    it is wanted.
+
+Two bugs found while building it, both mine:
+
+* The forward transform and its inverse were **duplicate copies of the same six
+  lines**. Adding zoom and pan to one of them would have put every drop and
+  every drag a little way from where it was aimed. They now come from one
+  `viewParams()`.
+* `[hidden]` loses to an explicit `display` on specificity, and `.tabs`,
+  `#blocked` and `.zoomers` all set one. The tab bar appeared on desktop, and
+  **the blocked banner could never have disappeared once the road cleared**.
+  Fixed with a `[hidden]{display:none!important}` reset, and the clearing is
+  now verified end to end.
+
+Verified in a real browser at 390×844 and 1440×900, on the live page and the
+`file://` replay artifact: tap-to-place, hold-to-remove and pinch-to-zoom all
+drive the world through the same socket a viewer uses, no page errors, and no
+horizontal overflow.
 
 ---
 

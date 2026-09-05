@@ -52,6 +52,13 @@
 }
 
 *{box-sizing:border-box}
+/* The hidden attribute must win. Several things on this page are toggled with
+   .hidden and also carry an explicit display in their own rule - .tabs, the
+   blocked banner, the zoom cluster - and a plain `display:flex` beats
+   `[hidden]`'s default `display:none` on specificity. The tab bar showed up on
+   desktop that way, and the blocked banner would never have gone away again
+   once the road cleared. */
+[hidden]{display:none!important}
 body{
   margin:0; background:var(--surface-0); color:var(--ink-1);
   font-family:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
@@ -150,18 +157,46 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
   .app{grid-template-columns:1fr; grid-template-rows:auto minmax(280px,46vh) auto auto; height:auto}
   aside{max-height:none}
 }
+.tabs{display:flex; gap:1px; background:var(--line); border:1px solid var(--line);
+  border-radius:2px; position:sticky; top:0; z-index:3}
+.tabs button{flex:1; border:0; border-radius:0; background:var(--surface-1);
+  padding:11px 4px; min-height:44px; font-size:11.5px}
+.tabs button[aria-pressed="true"]{background:var(--accent-soft);
+  color:var(--accent); box-shadow:inset 0 -2px 0 var(--accent)}
+
 /* Phones. Until the viewport meta above existed none of this could fire: the
    page was laid out at 980px and scaled down, so a 390px screen never met a
    max-width query it was actually narrow enough for. */
 @media (max-width:640px){
+  /* The road stays put and the controls scroll under it. Adjusting a
+     threshold and watching what it does to the vehicle is the whole point of
+     the panel, and on a phone that is impossible if moving the slider scrolls
+     the road off the screen. */
+  #stage{position:sticky; top:0; z-index:4; box-shadow:0 1px 0 var(--line)}
+  /* Pinned to the bottom of the screen, not to the top of the rail. The rail
+     scrolls under a sticky road, so a tab bar that scrolls with it is gone the
+     moment you read past the first group - which is exactly when you want it. */
+  .tabs{display:flex; position:fixed; left:0; right:0; bottom:0; top:auto;
+        z-index:20; border-left:0; border-right:0; border-bottom:0;
+        padding-bottom:env(safe-area-inset-bottom, 0)}
+  .tabs button{padding:13px 4px; min-height:48px; font-size:12px}
+  /* Room for it, so the last control is not permanently under the bar. */
+  footer{padding-bottom:64px}
+  /* One group at a time: the rail is a 1000px wall of controls otherwise, and
+     everything past the first screenful is found only by accident. */
+  aside > [data-tab]{display:none}
+  aside[data-tab-active="status"] > [data-tab~="status"],
+  aside[data-tab-active="drop"]   > [data-tab~="drop"],
+  aside[data-tab-active="tune"]   > [data-tab~="tune"],
+  aside[data-tab-active="layers"] > [data-tab~="layers"]{display:block}
   body{font-size:15px}
   header{padding:10px 14px; gap:10px}
   /* The tagline costs a fifth of the screen to say what the wordmark and the
      first tour card already say. */
   .tagline{display:none}
   .scenario{margin-left:0; width:100%; gap:14px}
-  .app{grid-template-rows:auto minmax(260px,42vh) auto auto}
-  aside{padding:14px 14px 20px; gap:16px}
+  .app{grid-template-rows:auto minmax(280px,48vh) auto auto}
+  aside{padding:12px 14px 20px; gap:14px}
   .overlay{left:10px; bottom:10px; gap:6px}
   .chip{font-size:11px; padding:4px 7px}
   /* Touch targets. 11.5px type in a 7px-padded button is a 28px tap area. */
@@ -179,6 +214,24 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
      layout viewport to 505 px and zoom the entire page out to fit. */
   #scenario-wrap{flex:1 1 100%; min-width:0}
   #scenario-pick{flex:1; min-width:0}
+}
+
+.zoomers{position:absolute; right:12px; top:12px; display:flex;
+  flex-direction:column; gap:6px; z-index:2}
+.zoomers button{width:38px; height:38px; padding:0; font-size:16px;
+  line-height:1; background:var(--surface-1); border:1px solid var(--line)}
+.zoom-level{font-family:"IBM Plex Mono",monospace; font-size:11px;
+  text-align:center; color:var(--ink-2); background:var(--surface-1);
+  border:1px solid var(--line); border-radius:2px; padding:2px 0}
+/* The reset only exists once there is something to reset. */
+.zoomers[data-view="default"] #zoom-reset,
+.zoomers[data-view="default"] .zoom-level{display:none}
+.palette.dimmed{opacity:.4; pointer-events:none}
+#erase-toggle[aria-pressed="true"]{background:var(--crit); border-color:var(--crit);
+  color:var(--surface-1)}
+@media (max-width:640px){
+  .zoomers{right:8px; top:8px; gap:8px}
+  .zoomers button{width:44px; height:44px; min-height:44px; font-size:18px}
 }
 
 /* --- "Nothing can get past this" prompt -----------------------------------
@@ -199,8 +252,11 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
 #blocked .h{font-size:12.5px; color:var(--ink-2); line-height:1.4}
 #blocked .h b{color:var(--ink-1); font-weight:600}
 @media (max-width:640px){
+  /* Full width, or it shrink-wraps to about half the screen and stacks the
+     sentence into eight lines. */
   #blocked{flex-direction:column; align-items:flex-start; gap:3px;
-           top:8px; padding:8px 11px}
+           top:8px; padding:8px 11px; left:8px; right:8px;
+           width:auto; max-width:none; transform:none}
   #blocked .t{font-size:11.5px}
   #blocked .h{font-size:12px}
 }
@@ -260,6 +316,12 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
 
   <div id="stage">
     <canvas id="bev"></canvas>
+    <div class="zoomers" id="zoomers" data-view="default" hidden>
+      <button id="zoom-in" aria-label="Zoom in" title="Zoom in">+</button>
+      <button id="zoom-out" aria-label="Zoom out" title="Zoom out">&minus;</button>
+      <button id="zoom-reset" aria-label="Reset the view" title="Reset the view">&#8853;</button>
+      <span class="zoom-level" id="zoom-level" aria-live="polite"></span>
+    </div>
     <div id="blocked" hidden>
       <span class="t">Road blocked</span>
       <span class="h" id="blocked-hint"></span>
@@ -273,14 +335,20 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
     </div>
   </div>
 
-  <aside>
-    <div class="state-card" id="state-card" style="--st:var(--ok)">
+  <aside data-tab-active="status">
+    <nav class="tabs" id="tabs" hidden>
+      <button data-goto="status" aria-pressed="true">Status</button>
+      <button data-goto="drop" aria-pressed="false">Drop</button>
+      <button data-goto="tune" aria-pressed="false">Tune</button>
+      <button data-goto="layers" aria-pressed="false">Layers</button>
+    </nav>
+    <div class="state-card" data-tab="status" id="state-card" style="--st:var(--ok)">
       <span class="eyebrow">Behaviour</span>
       <div class="state-name" id="m-behaviour">cruise</div>
       <div class="state-why" id="m-reason">clear</div>
     </div>
 
-    <div>
+    <div data-tab="status">
       <h2>Telemetry</h2>
       <div class="tiles">
         <div class="tile"><span class="eyebrow">Speed</span><div><span class="v" id="m-speed">0.0</span><span class="u">m/s</span></div></div>
@@ -292,20 +360,22 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
       </div>
     </div>
 
-    <div id="place-panel" hidden>
+    <div id="place-panel" data-tab="drop" hidden>
       <h2>Drop a road user</h2>
       <p style="margin:0 0 9px;color:var(--ink-2);font-size:12.5px">
-        <b>Drag</b> any vehicle to reposition it while the world runs.
-        Click empty road to place. Shift-click removes. The planner has no
-        foreknowledge of anything you do.</p>
+        <b>Drag</b> any vehicle to reposition it while the world runs. Tap
+        empty road to place. <b>Hold</b> a road user to remove it, or turn on
+        <b>Erase</b> and tap. Drag the empty road to pan, pinch or scroll to
+        zoom. The planner has no foreknowledge of anything you do.</p>
       <div class="palette" id="palette"></div>
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button id="erase-toggle" aria-pressed="false">Erase</button>
         <button id="restart-ego">Reset vehicle</button>
         <button id="pause-live" aria-pressed="false">Pause</button>
       </div>
     </div>
 
-    <div id="tune-panel" hidden>
+    <div id="tune-panel" data-tab="tune" hidden>
       <h2>Thresholds <button id="tune-reset" style="float:right;padding:3px 8px;font-size:10px">Reset</button></h2>
       <p style="margin:0 0 9px;color:var(--ink-2);font-size:12.5px">
         Every threshold that shapes the behaviour, changeable while it drives.
@@ -313,12 +383,12 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
       <div id="tune-sections"></div>
     </div>
 
-    <div>
+    <div data-tab="layers">
       <h2>Layers</h2>
       <div class="layers" id="layers"></div>
     </div>
 
-    <div>
+    <div data-tab="layers">
       <h2>Road users</h2>
       <div class="legend">
         <div><span class="shape" style="background:var(--ego);outline:1.5px solid var(--ego-ring)"></span> Ego vehicle</div>
@@ -421,6 +491,12 @@ for (const [key,label,def,swatch] of LAYERS){
 
 const cv = document.getElementById("bev"), ctx = cv.getContext("2d");
 let scale = 7, follow = true, playing = false, rate = 1, idx = 0, dpr = 1;
+//: ``scale`` is the effective pixels-per-metre and stays the single number the
+//: renderer reads; ``baseScale`` is what the viewport fit produced and ``zoom``
+//: is what the operator did to it. Pan is a screen-space offset, so it composes
+//: with follow mode instead of fighting it.
+let baseScale = 7, zoom = 1, panX = 0, panY = 0;
+const ZOOM_MIN = 0.55, ZOOM_MAX = 5.0;
 const riskCanvas = document.createElement("canvas"); const riskCtx = riskCanvas.getContext("2d");
 
 // Metres of road the view tries to hold. In follow mode the ego heads right,
@@ -440,8 +516,9 @@ function resize(){
   // too small to read and far too small to hit with a thumb. A narrow screen
   // shows less road ahead instead of shrinking everything on it.
   const ahead = Math.max(VIEW_AHEAD_MIN, Math.min(VIEW_AHEAD_MAX, r.width/8));
-  scale = Math.max(4, Math.min(11, Math.min(r.width/ahead,
-                                            r.height/VIEW_ACROSS)));
+  baseScale = Math.max(4, Math.min(11, Math.min(r.width/ahead,
+                                                r.height/VIEW_ACROSS)));
+  scale = baseScale * zoom;
   draw();
 }
 window.addEventListener("resize", resize);
@@ -449,16 +526,27 @@ window.addEventListener("resize", resize);
 function frame(){ return frames[Math.max(0, Math.min(frames.length-1, idx))]; }
 
 // World -> screen. Follow mode keeps the ego a third from the left, heading right.
-function makeTransform(f){
+// One description of the view, so the forward transform and its inverse cannot
+// drift apart - they carried duplicate copies of the same six lines, and adding
+// zoom and pan to only one of them would have put every drop and every drag a
+// little way from where it was aimed.
+function viewParams(f){
   const w = cv.width/dpr, h = cv.height/dpr;
   const th = follow ? -f.ego.h : 0;
-  const cx = follow ? w*0.30 : w*0.5, cy = h*0.5;
-  const ox = follow ? f.ego.x : (scene.length||100)/2;
-  const oy = follow ? f.ego.y : 0;
-  const c = Math.cos(th), s = Math.sin(th);
+  return {
+    cx: (follow ? w*0.30 : w*0.5) + panX,
+    cy: h*0.5 + panY,
+    ox: follow ? f.ego.x : (scene.length||100)/2,
+    oy: follow ? f.ego.y : 0,
+    c: Math.cos(th), s: Math.sin(th),
+  };
+}
+
+function makeTransform(f){
+  const v = viewParams(f);
   return (x,y) => {
-    const dx = x-ox, dy = y-oy;
-    return [cx + (dx*c - dy*s)*scale, cy - (dx*s + dy*c)*scale];
+    const dx = x-v.ox, dy = y-v.oy;
+    return [v.cx + (dx*v.c - dy*v.s)*scale, v.cy - (dx*v.s + dy*v.c)*scale];
   };
 }
 
@@ -742,7 +830,7 @@ const PLACEABLE = [
   ["barricade",    "Barricade",   "static",   0.0],
   ["parked_vehicle","Parked car", "static",   0.0],
 ];
-let placeIdx = 0, ws = null, lastFrame = null;
+let placeIdx = 0, ws = null, lastFrame = null, eraseMode = false;
 let dragId = null, dragMoved = false, heldIds = [];
 
 // Hit-test in the browser rather than round-tripping to the server: grabbing a
@@ -761,15 +849,43 @@ function agentAt(pt){
 
 function screenToWorld(px, py){
   const f = lastFrame || frame(); if (!f) return null;
-  const w = cv.width/dpr, h = cv.height/dpr;
-  const th = follow ? -f.ego.h : 0;
-  const cx = follow ? w*0.30 : w*0.5, cy = h*0.5;
-  const ox = follow ? f.ego.x : (scene.length||100)/2;
-  const oy = follow ? f.ego.y : 0;
-  const c = Math.cos(th), s = Math.sin(th);
-  const ux = (px-cx)/scale, uy = -(py-cy)/scale;
-  // Inverse of the forward rotation.
-  return [ox + ux*c + uy*s, oy - ux*s + uy*c];
+  const v = viewParams(f);
+  const ux = (px-v.cx)/scale, uy = -(py-v.cy)/scale;
+  // Exact inverse of makeTransform, from the same parameters.
+  return [v.ox + ux*v.c + uy*v.s, v.oy - ux*v.s + uy*v.c];
+}
+
+// World point currently under a screen point, for zooming about the cursor or
+// the pinch midpoint: zoom, re-project, and pan by however far it moved.
+function anchorZoom(px, py, nextZoom){
+  const before = screenToWorld(px, py);
+  zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, nextZoom));
+  scale = baseScale * zoom;
+  if (before){
+    const f = lastFrame || frame();
+    if (f){
+      const after = makeTransform(f)(before[0], before[1]);
+      panX += px - after[0];
+      panY += py - after[1];
+    }
+  }
+  syncViewChip();
+  draw();
+}
+
+function resetView(){
+  zoom = 1; panX = 0; panY = 0; scale = baseScale; syncViewChip(); draw();
+}
+
+// Say when the view is no longer the one the page chose, and by how much. A
+// viewer who has zoomed in and lost the vehicle otherwise has no way of
+// knowing why nothing is on screen, or what to press to get it back.
+function syncViewChip(){
+  const box = document.getElementById("zoomers");
+  if (!box) return;
+  const moved = Math.abs(zoom - 1) > 1e-3 || panX || panY;
+  box.setAttribute("data-view", moved ? "moved" : "default");
+  document.getElementById("zoom-level").textContent = `${zoom.toFixed(1)}\u00d7`;
 }
 
 function buildTuning(tunables, values){
@@ -830,6 +946,181 @@ function syncTuning(values){
 }
 
 function send(msg){ if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); }
+
+// --------------------------------------------------------------------------
+// Canvas gestures. Attached in both modes: panning and zooming are as useful
+// on a shared recording as on the live world, and the editing commands below
+// are no-ops when there is no socket, so one set of handlers serves both.
+// In replay ``agentAt`` finds nothing (there is no live frame to hit-test
+// against), so every press there is a pan, which is exactly right.
+// --------------------------------------------------------------------------
+function wireCanvasControls(){
+const worldAt = e => {
+  const r = cv.getBoundingClientRect();
+  return screenToWorld(e.clientX - r.left, e.clientY - r.top);
+};
+const screenAt = e => {
+  const r = cv.getBoundingClientRect();
+  return [e.clientX - r.left, e.clientY - r.top];
+};
+
+// Live pointers, so one finger can pan while two can pinch. Keyed by
+// pointerId because a touch screen sends several at once and a mouse never
+// does; treating them uniformly is what lets one set of handlers serve both.
+const pointers = new Map();
+let panning = false, pinchDist = 0, pinchMid = [0, 0], longPress = 0;
+//: How far a press may wander and still count as a tap, CSS px. Generous,
+//: because a thumb is not a mouse.
+const TAP_SLOP = 12;
+//: How long a press must be held on a road user to remove it, ms.
+const HOLD_MS = 550;
+
+const cancelHold = () => { clearTimeout(longPress); longPress = 0; };
+
+cv.addEventListener("pointerdown", e => {
+  cv.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, {start: screenAt(e), at: screenAt(e)});
+  if (pointers.size === 2){
+    // Second finger down: whatever the first was doing, this is a pinch.
+    cancelHold();
+    if (dragId !== null){ send({cmd:"drop", id: dragId}); dragId = null; }
+    panning = false;
+    const [a, b] = [...pointers.values()];
+    pinchDist = Math.hypot(a.at[0]-b.at[0], a.at[1]-b.at[1]) || 1;
+    pinchMid = [(a.at[0]+b.at[0])/2, (a.at[1]+b.at[1])/2];
+    return;
+  }
+  if (pointers.size > 2) return;
+
+  const pt = worldAt(e); if (!pt) return;
+  const hit = agentAt(pt);
+  dragMoved = false;
+  if (hit && !e.shiftKey && !eraseMode){
+    dragId = hit.id;
+    cv.style.cursor = "grabbing";
+    send({cmd:"grab", id: hit.id});
+    // Hold still on a road user and it is removed. This is the only way to
+    // delete one on a touch screen: the alternative was shift-click, and no
+    // phone has a shift key.
+    longPress = setTimeout(() => {
+      longPress = 0;
+      if (dragId === null) return;
+      send({cmd:"drop", id: dragId});
+      send({cmd:"remove", x: pt[0], y: pt[1]});
+      dragId = null; dragMoved = true;      // consumed: no placement on release
+      cv.style.cursor = "crosshair";
+    }, HOLD_MS);
+  } else if (!hit){
+    panning = true;                          // empty road: drag to pan
+  }
+});
+
+cv.addEventListener("pointermove", e => {
+  const p = pointers.get(e.pointerId);
+  if (p) p.at = screenAt(e);
+
+  if (pointers.size === 2){
+    const [a, b] = [...pointers.values()];
+    const dist = Math.hypot(a.at[0]-b.at[0], a.at[1]-b.at[1]) || 1;
+    const mid = [(a.at[0]+b.at[0])/2, (a.at[1]+b.at[1])/2];
+    panX += mid[0] - pinchMid[0];
+    panY += mid[1] - pinchMid[1];
+    pinchMid = mid;
+    anchorZoom(mid[0], mid[1], zoom * (dist / pinchDist));
+    pinchDist = dist;
+    return;
+  }
+
+  if (p && Math.hypot(p.at[0]-p.start[0], p.at[1]-p.start[1]) > TAP_SLOP){
+    cancelHold();
+    dragMoved = true;
+  }
+  const pt = worldAt(e); if (!pt) return;
+  if (dragId !== null){
+    send({cmd:"drag", id: dragId, x: pt[0], y: pt[1]});
+  } else if (panning && p){
+    panX += p.at[0] - (p.last ? p.last[0] : p.start[0]);
+    panY += p.at[1] - (p.last ? p.last[1] : p.start[1]);
+    p.last = p.at.slice();
+    syncViewChip();
+    draw();
+  } else if (!p){
+    cv.style.cursor = eraseMode ? "cell"
+                    : agentAt(pt) ? "grab" : "crosshair";
+  }
+});
+
+const endPointer = e => {
+  const p = pointers.get(e.pointerId);
+  pointers.delete(e.pointerId);
+  cancelHold();
+  if (pointers.size >= 1){                   // a pinch losing one finger
+    panning = false;
+    if (dragId !== null){ send({cmd:"drop", id: dragId}); dragId = null; }
+    return;
+  }
+  const moved = p && Math.hypot(p.at[0]-p.start[0],
+                                p.at[1]-p.start[1]) > TAP_SLOP;
+  if (dragId !== null){
+    send({cmd:"drop", id: dragId});
+    dragId = null;
+    cv.style.cursor = eraseMode ? "cell" : "crosshair";
+    // A grab that never moved and was not held long enough is a tap on a
+    // road user: in erase mode that removes it, otherwise it was a no-op
+    // grab and nothing should happen.
+    if (!moved && eraseMode && p){
+      const pt = screenToWorld(p.at[0], p.at[1]);
+      if (pt) send({cmd:"remove", x:pt[0], y:pt[1]});
+    }
+    return;
+  }
+  if (panning){ panning = false; if (moved) return; }
+  if (!p || moved || dragMoved) return;
+  const pt = screenToWorld(p.at[0], p.at[1]);
+  if (!pt) return;
+  if (e.shiftKey || eraseMode) send({cmd:"remove", x:pt[0], y:pt[1]});
+  else {
+    const [cls,,policy,speed] = PLACEABLE[placeIdx];
+    send({cmd:"place", cls, x:pt[0], y:pt[1], policy, speed});
+  }
+};
+cv.addEventListener("pointerup", endPointer);
+cv.addEventListener("pointercancel", e => {
+  pointers.delete(e.pointerId);
+  cancelHold();
+  panning = false;
+  if (dragId !== null){ send({cmd:"drop", id: dragId}); dragId = null; }
+  cv.style.cursor = eraseMode ? "cell" : "crosshair";
+});
+
+// Wheel and trackpad pinch both arrive here; ctrlKey marks the latter.
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  const [px, py] = screenAt(e);
+  anchorZoom(px, py, zoom * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0016)));
+}, {passive: false});
+
+cv.style.cursor = "crosshair";
+cv.style.touchAction = "none";
+
+for (const [id, f] of [["zoom-in", () => 1.35], ["zoom-out", () => 1/1.35]]){
+  document.getElementById(id).addEventListener("click", () => {
+    const r = cv.getBoundingClientRect();
+    anchorZoom(r.width/2, r.height/2, zoom * f());
+  });
+}
+document.getElementById("zoom-reset").addEventListener("click", resetView);
+
+const eraseBtn = document.getElementById("erase-toggle");
+eraseBtn.addEventListener("click", () => {
+  eraseMode = !eraseMode;
+  eraseBtn.setAttribute("aria-pressed", String(eraseMode));
+  eraseBtn.textContent = eraseMode ? "Erasing" : "Erase";
+  cv.style.cursor = eraseMode ? "cell" : "crosshair";
+  document.getElementById("palette").classList.toggle("dimmed", eraseMode);
+});
+
+}
 
 function startLive(){
   document.getElementById("tune-panel").hidden = false;
@@ -918,57 +1209,6 @@ function startLive(){
     draw();
   });
 
-  const worldAt = e => {
-    const r = cv.getBoundingClientRect();
-    return screenToWorld(e.clientX - r.left, e.clientY - r.top);
-  };
-
-  cv.addEventListener("pointerdown", e => {
-    const pt = worldAt(e); if (!pt) return;
-    const hit = agentAt(pt);
-    dragMoved = false;
-    if (hit && !e.shiftKey){
-      dragId = hit.id;
-      cv.setPointerCapture(e.pointerId);
-      cv.style.cursor = "grabbing";
-      send({cmd:"grab", id: hit.id});
-    }
-  });
-
-  cv.addEventListener("pointermove", e => {
-    const pt = worldAt(e); if (!pt) return;
-    if (dragId !== null){
-      dragMoved = true;
-      send({cmd:"drag", id: dragId, x: pt[0], y: pt[1]});
-    } else {
-      cv.style.cursor = agentAt(pt) ? "grab" : "crosshair";
-    }
-  });
-
-  const endDrag = e => {
-    const pt = worldAt(e);
-    if (dragId !== null){
-      send({cmd:"drop", id: dragId});
-      dragId = null;
-      cv.style.cursor = "crosshair";
-      return;
-    }
-    // A press that grabbed nothing and did not move is a placement.
-    if (!pt || dragMoved) return;
-    if (e.shiftKey) send({cmd:"remove", x:pt[0], y:pt[1]});
-    else {
-      const [cls,,policy,speed] = PLACEABLE[placeIdx];
-      send({cmd:"place", cls, x:pt[0], y:pt[1], policy, speed});
-    }
-  };
-  cv.addEventListener("pointerup", endDrag);
-  cv.addEventListener("pointercancel", () => {
-    if (dragId !== null){ send({cmd:"drop", id: dragId}); dragId = null; }
-    cv.style.cursor = "crosshair";
-  });
-  cv.style.cursor = "crosshair";
-  cv.style.touchAction = "none";
-
   document.getElementById("tune-reset").addEventListener("click", () =>
     send({cmd:"reset_tuning"}));
 
@@ -1029,7 +1269,12 @@ const TOUR = [
    sel:"#bev", live:true,
    b:"Grab any vehicle and move it while the world keeps running. Drop a "+
      "bus across the lane and watch the trajectory search go red. "+
-     "Shift-click removes a road user."},
+     "<b>Hold</b> a road user to remove it, or use <b>Erase</b>."},
+  {t:"Get closer",
+   sel:"#zoomers",
+   b:"Pinch or scroll to zoom, drag the empty road to pan. Worth doing: at "+
+     "this range the risk field and the candidate fan are a smear, and up "+
+     "close they are the actual reasoning."},
   {t:"Change how it thinks, mid-drive",
    sel:"#tune-panel", live:true,
    b:"Every threshold that shapes the behaviour is a live control. Shorten "+
@@ -1167,6 +1412,33 @@ function offerTour(){
   // the server's schema and the ablations step has something to point at.
   if (tourStore(true) !== "seen") setTimeout(openTour, LIVE ? 1200 : 400);
 }
+
+document.getElementById("zoomers").hidden = false;
+wireCanvasControls();
+
+// Tabs. The bar is only shown where the stylesheet actually uses it; on a wide
+// screen every group is visible at once and a tab bar would only hide things.
+(function wireTabs(){
+  const rail = document.querySelector("aside");
+  const bar = document.getElementById("tabs");
+  const narrow = () => window.matchMedia("(max-width:640px)").matches;
+  const sync = () => { bar.hidden = !narrow(); };
+  for (const b of bar.querySelectorAll("button")){
+    b.addEventListener("click", () => {
+      rail.setAttribute("data-tab-active", b.dataset.goto);
+      for (const o of bar.querySelectorAll("button"))
+        o.setAttribute("aria-pressed", String(o === b));
+      // The rail scrolls under a pinned road, so bring the chosen group up to
+      // just below it rather than leaving the reader wherever they were.
+      const stage = document.getElementById("stage");
+      const top = rail.getBoundingClientRect().top + window.scrollY
+                  - (narrow() ? stage.getBoundingClientRect().height : 0);
+      window.scrollTo({top: Math.max(0, top), behavior: "smooth"});
+    });
+  }
+  addEventListener("resize", sync);
+  sync();
+})();
 
 if (LIVE){
   startLive();
