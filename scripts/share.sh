@@ -21,7 +21,7 @@
 set -euo pipefail
 
 PORT=8420
-SCENARIO=village_road_unmarked
+SCENARIO=highway_merge_slow
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="$2"; shift 2 ;;

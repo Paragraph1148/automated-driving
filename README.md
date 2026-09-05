@@ -92,7 +92,7 @@ uv run sarathi run all --chaos 0.7             # every scenario, harder
 uv run sarathi run all --controller baseline   # the lane-following comparison
 uv run sarathi run market_dense_mixed --record run.json
 uv run sarathi replay run.json -o page.html    # shareable replay page
-uv run --extra dev pytest                      # 99 tests
+uv run --extra dev pytest                      # 155 tests
 uv run python scripts/hostcheck.py             # can this box hold 20 Hz?
 ./scripts/share.sh                             # public URL via a tunnel
 ```
@@ -232,7 +232,7 @@ scenarios/       *.yaml — one spec per scenario, shipped inside the package
 scripts/         benchmark.py (the evidence), capture.py (the figures),
                  hostcheck.py (can this machine hold 20 Hz?),
                  share.sh (a public URL in one command)
-tests/           99 tests, including behavioural regressions
+tests/           155 tests, including behavioural regressions
 docs/            architecture, problem statement, team plan, MATLAB bridge,
                  hosting
 deploy/          Dockerfile, compose, Caddyfile, systemd unit, Oracle setup,

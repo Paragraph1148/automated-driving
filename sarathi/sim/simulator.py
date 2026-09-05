@@ -30,6 +30,22 @@ DESPAWN_MARGIN = 30.0
 #: Fastest the ego may travel backwards, m/s. Walking pace: a shunt is a
 #: last-resort manoeuvre in a place with no room, never a way of making progress.
 EGO_REVERSE_LIMIT = 1.4
+#: How far inside the corridor a re-entering road user appears, metres. Far
+#: enough in that it is visible arriving rather than materialising on the edge
+#: of the frame, near enough out that it does not appear in front of the ego.
+FLOW_ENTRY_INSET = 4.0
+#: Clear road a re-entering road user needs, metres, on top of both bodies'
+#: half-lengths. Traffic waits its turn at the entry rather than spawning on
+#: top of whatever is already sitting there.
+FLOW_ENTRY_GAP = 12.0
+#: Longest queue of road users waiting to re-enter. A cap, not a target: if the
+#: entry stays blocked this long the road is saturated anyway, and an unbounded
+#: queue would dump the whole backlog the instant it cleared.
+FLOW_QUEUE_MAX = 24
+#: Retired agents tolerated before they are swept out of the world dict. A live
+#: session runs for as long as somebody is watching, and every despawn used to
+#: leave a corpse behind that each subsequent tick still had to iterate over.
+REAP_THRESHOLD = 32
 #: How far a wheeled road user's heading may deviate from its direction of travel
 #: along the road, radians. Generous enough for lane changes and filtering,
 #: tight enough that a U-turn is impossible.
@@ -60,6 +76,14 @@ class Simulator:
         self.agents, policy_specs = populate(scenario, self.rng)
         self.policies = {aid: build_policy(name, **kwargs)
                          for aid, (name, kwargs) in policy_specs.items()}
+        #: How each agent was built, kept so a road user that drives off the far
+        #: end can be sent back in at the near one as the same kind of traffic.
+        self._policy_specs: dict[int, tuple[str, dict]] = dict(policy_specs)
+        #: Monotonic, never reused. Ids are handed to the viewer, which sends
+        #: them back to grab and drag; reissuing one that has just been swept up
+        #: would put somebody's hand on a different vehicle than the one they
+        #: reached for.
+        self._next_id = max(self.agents, default=0) + 1
         self._add_ego()
 
         self.recorder = Recorder(self.corridor, scenario.name,
@@ -82,6 +106,9 @@ class Simulator:
         #: controller so its tracker does not coast a vehicle that is no longer
         #: anywhere; no sensor can tell that from an occlusion.
         self.vanished: list[tuple[float, float]] = []
+        #: Road users that have left the corridor and are waiting for a gap to
+        #: re-enter at the other end. See :meth:`_admit_entries`.
+        self._pending_entry: list[dict] = []
         self.finished = False
         self.outcome = ""
         self._collision_with: str | None = None
@@ -130,6 +157,7 @@ class Simulator:
                       aggression=aggression)
         self.agents[agent_id] = agent
         self.policies[agent_id] = build_policy(policy)
+        self._policy_specs[agent_id] = (policy, {})
         return agent_id
 
     def agent_near(self, x: float, y: float,
@@ -190,7 +218,9 @@ class Simulator:
         return best
 
     def _next_agent_id(self) -> int:
-        return max(self.agents) + 1 if self.agents else 1
+        agent_id = self._next_id
+        self._next_id += 1
+        return agent_id
 
     # -- main loop --------------------------------------------------------
     def run(self, verbose: bool = False) -> RunResult:
@@ -253,6 +283,9 @@ class Simulator:
         self.t += self.dt
         self._keep_traffic_on_road()
         self._despawn()
+        if self.live:
+            self._admit_entries()
+            self._reap()
 
         others = [a for aid, a in self.agents.items()
                   if aid != EGO_ID and a.active]
@@ -364,12 +397,114 @@ class Simulator:
         for aid, agent in self.agents.items():
             if aid == EGO_ID or not agent.active:
                 continue
-            s, _ = ref.to_frenet(agent.state.position)
+            s, d = ref.to_frenet(agent.state.position)
+            if agent.state.speed <= 0.1:
+                continue          # standing still: it has not driven anywhere
             # Agents pinned at either end of the corridor have driven off it.
-            if s <= 0.05 and agent.state.speed > 0.1:
-                agent.active = False
-            elif s >= length - 0.05 and agent.state.speed > 0.1:
-                agent.active = False
+            if s <= 0.05:
+                self._retire(aid, agent, float(d), length - FLOW_ENTRY_INSET)
+            elif s >= length - 0.05:
+                self._retire(aid, agent, float(d), FLOW_ENTRY_INSET)
+
+    def _retire(self, aid: int, agent: Agent, d: float, re_enter_s: float) -> None:
+        """Take a road user off the far end of the road, and queue its return.
+
+        Traffic is a *flow*, not a fixed cast. Before this, every road user that
+        reached the end of the corridor was deactivated and nothing replaced it,
+        so a live session's population could only fall. On the one-way merge
+        scenario - where everything moves, and everything therefore eventually
+        reaches the end - it fell from 26 road users to 1 over five minutes, and
+        by the first lap completion at t=138 s only 2 were left. That is the
+        emptied-out second lap: the ego respawns at the start of a road the
+        traffic has already driven off the end of.
+
+        A departure at one end is now an arrival at the other, which conserves
+        the density the scenario asked for instead of draining it.
+        """
+        agent.active = False
+        self.held.discard(aid)
+        if not self.live:
+            return
+        # It really has stopped existing, and no sensor can tell that from an
+        # occlusion; say so, or perception coasts a ghost of it.
+        self.vanished.append((float(agent.state.x), float(agent.state.y)))
+        if len(self._pending_entry) >= FLOW_QUEUE_MAX:
+            return
+        policy, args = self._policy_specs.get(aid, ("traffic", {}))
+        self._pending_entry.append({
+            "cls": agent.cls, "policy": policy, "args": dict(args),
+            "s": float(re_enter_s), "d": d,
+            "speed": float(agent.state.speed),
+            "aggression": float(agent.aggression),
+        })
+
+    def _admit_entries(self) -> None:
+        """Let queued road users back in wherever there is room for them.
+
+        Entering traffic waits for a gap rather than being forced in: a vehicle
+        materialising inside another one, or in front of the ego, would be a
+        collision the planner had no way to avoid and no business being scored on.
+        """
+        if not self._pending_entry:
+            return
+        ref = self.corridor.reference
+        occupied = []
+        for agent in self.agents.values():
+            if not agent.active:
+                continue
+            s, d = ref.to_frenet(agent.state.position)
+            occupied.append((float(s), float(d), agent.params.length / 2.0,
+                             agent.params.width / 2.0))
+
+        waiting: list[dict] = []
+        for entry in self._pending_entry:
+            p = params_for(entry["cls"])
+            s = entry["s"]
+            d_min, d_max = self.corridor.bounds_at(s)
+            half_w = p.width / 2.0
+            d = float(np.clip(entry["d"], float(d_min) + half_w,
+                              float(d_max) - half_w))
+            clear = all(
+                abs(s - os_) >= p.length / 2.0 + ohl + FLOW_ENTRY_GAP or
+                abs(d - od) >= half_w + ohw + 0.6
+                for os_, od, ohl, ohw in occupied)
+            if not clear:
+                waiting.append(entry)
+                continue
+            pos = ref.to_cartesian(s, d)
+            heading = float(ref.heading_at(s))
+            if entry["policy"] in ("oncoming", "wrong_way"):
+                heading = float(heading + math.pi)
+            aid = self._next_agent_id()
+            self.agents[aid] = Agent(
+                id=aid, cls=entry["cls"],
+                state=State(float(pos[0]), float(pos[1]), heading,
+                            entry["speed"]),
+                aggression=entry["aggression"])
+            self.policies[aid] = build_policy(entry["policy"], **entry["args"])
+            self._policy_specs[aid] = (entry["policy"], entry["args"])
+            occupied.append((s, d, p.length / 2.0, half_w))
+        self._pending_entry = waiting
+
+    def _reap(self) -> None:
+        """Sweep up retired agents so a long live session does not accumulate them.
+
+        Every tick iterates the whole world dict, so leaving the dead in it makes
+        an hour-long session progressively slower for no reason. Ids are never
+        reused, so nothing that still holds one can be handed the wrong vehicle.
+        """
+        dead = [aid for aid, agent in self.agents.items()
+                if aid != EGO_ID and not agent.active]
+        if len(dead) < REAP_THRESHOLD:
+            return
+        for aid in dead:
+            del self.agents[aid]
+            self.policies.pop(aid, None)
+            self._policy_specs.pop(aid, None)
+            # Erasing and contact-clearing do not go through _retire, so a
+            # held id can still be sitting here; the viewer would be told it
+            # is holding something that no longer exists.
+            self.held.discard(aid)
 
     def _check_termination(self, view: FrenetView, others: list[Agent]) -> None:
         ref = self.corridor.reference

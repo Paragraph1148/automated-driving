@@ -376,7 +376,7 @@ def _http_routes(page: bytes):
     return process_request
 
 
-def run(scenario: str = "village_road_unmarked", chaos: float | None = None,
+def run(scenario: str = "highway_merge_slow", chaos: float | None = None,
         seed: int | None = None, port: int = 8420,
         scenarios: str | None = None, host: str = "127.0.0.1",
         keep_warm: bool = False) -> None:

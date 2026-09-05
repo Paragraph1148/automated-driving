@@ -360,6 +360,84 @@ default**.
 
 ---
 
+## B5 — The second lap starts on an empty road  ✅ done
+
+Reported from the live deployment: complete a run and most of the world is
+gone by the time the ego respawns at the start.
+
+### The cause
+
+Road users were only ever *removed*. Anything that reached either end of the
+corridor was deactivated, and nothing replaced it, so a live session's
+population could only fall — monotonically, with no floor. Traffic was being
+modelled as a fixed cast rather than as a flow.
+
+`highway_merge_slow` is the worst case and the one the viewer was watching: it
+is one-way and everything in it moves, so *every* road user eventually reaches
+the end. `village_road_unmarked` looked healthier only because most of what is
+in it — cattle, parked vehicles, barricades — never goes anywhere. It was
+losing the same traffic and keeping the same scenery.
+
+### The fix
+
+A departure at one end is now an arrival at the other, as the same class of
+road user, with the same policy and the same lateral position. Three
+constraints on it:
+
+* **entering traffic waits for a gap.** A vehicle materialising inside another
+  one — or in front of the ego — would be a collision the planner had no way to
+  avoid and no business being scored on. Arrivals queue at the entry and are
+  admitted when there is room, which is what joining a road looks like anyway.
+* **only traffic that drove away comes back.** A road user the viewer erased,
+  or one cleared after contact, stays gone. Re-entry restores the density the
+  scenario asked for; it does not undo the viewer's edits.
+* **scored runs are untouched.** Re-entry is live-session behaviour only. A
+  benchmark run is one pass against the population the scenario specified;
+  topping it up mid-run would change every number in the campaign and none of
+  them would be comparable to the ones already reported.
+
+Two things fell out of it. Retired agents used to stay in the world dict
+forever, and every tick walks that dict — so they are now swept up once enough
+accumulate. And because sweeping frees ids, the allocator was changed from
+"one past the highest" to a monotonic counter: the viewer grabs vehicles *by
+id*, and reissuing one would put somebody's finger on a different vehicle from
+the one they reached for.
+
+### Measured
+
+Five minutes of live session, chaos 0.35, population as a share of the
+starting one:
+
+| `highway_merge_slow`, 26 at t=0 | before | after |
+|---|---|---|
+| t = 60 s | 16 (62%) | **25 (96%)** |
+| t = 120 s | 7 (27%) | **22 (85%)** |
+| t = 300 s | **1 (4%)** | **21 (81%)** |
+| at first lap completion | t=138 s, **2 left** | t=123 s, **23 left** |
+| second lap | — | t=199 s, **22 left** |
+
+| `village_road_unmarked`, 14 at t=0 | before | after |
+|---|---|---|
+| t = 300 s | 11 (79%) | **13 (93%)** |
+
+The lap also completes *sooner* with the fix in — 123 s against 138 s — despite
+there being ten times as much traffic to negotiate. The old empty road was not
+an easier road; it was a road the ego crossed while nothing else was on it.
+
+---
+
+## Default scenario
+
+`highway_merge_slow` is now what `sarathi serve` opens with, in place of
+`village_road_unmarked`. It is the scenario most likely to complete a run,
+which is what a first-time viewer should see before they start dropping cattle
+in front of the vehicle. Changed in `sarathi/cli.py`, `sarathi/serve.py` and
+`scripts/share.sh`; the headless-run examples in the README still name
+`village_road_unmarked`, because there a scenario is an argument rather than a
+default.
+
+---
+
 ## Appendix: how the standstill was first spotted
 
 Measured over 60 s on `village_road_unmarked`, before P0.5:
