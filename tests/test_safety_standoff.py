@@ -118,6 +118,61 @@ def test_the_supervisor_can_still_only_ever_slow_us_down():
     assert not clear.intervened
 
 
+# -- the blocked report ----------------------------------------------------
+def _blocked(tracks, ego_d=1.8, ego_speed=0.0, corridor=None):
+    corridor = corridor or _corridor()
+    return SafetySupervisor().road_blocked(
+        ego_speed, (50.0, ego_d, ego_speed, 0.0), tracks, corridor,
+        EGO_HALF_WIDTH)
+
+
+def test_a_moving_vehicle_is_never_reported_as_walled_in():
+    """Slowing for a leader is not the same as having nowhere to go."""
+    wall = [_stopped(i, x, d) for i, (x, d) in
+            enumerate([(58.0, -3.0), (60.0, -0.4), (62.0, 2.2)], start=1)]
+    assert _blocked(wall, ego_speed=4.0) == (False, None)
+
+
+def test_a_clear_band_beside_the_obstruction_is_not_blocked():
+    assert _blocked([_stopped(1, 55.0, 1.8)]) == (False, None)
+
+
+def test_a_wall_across_the_carriageway_is_reported_with_its_nearest_member():
+    """What the viewer is told: blocked, and which one to reach for.
+
+    Staggered rather than abreast, because a rank of vehicles at one station
+    occludes itself and the tracker only ever sees the outermost - the report
+    is built from what the vehicle perceives, not from ground truth.
+    """
+    wall = [_stopped(1, 62.0, -3.0), _stopped(2, 54.4, -0.4),
+            _stopped(3, 58.0, 2.2), _stopped(4, 64.0, 3.6)]
+    blocked, who = _blocked(wall)
+    assert blocked, "a walled carriageway must be reported to the viewer"
+    # The track itself, not its id: a track id belongs to the tracker's own
+    # numbering, and matching it against the viewer's list of simulator agents
+    # puts the marker on whichever unrelated vehicle shares the number.
+    assert who is not None and who.x == pytest.approx(54.4), (
+        f"should name the nearest blocker, named the one at x={who and who.x}")
+    assert who.cls is AgentClass.CAR
+
+
+def test_the_blocked_report_never_drives_anything():
+    """It is advice for a person, not an input to control.
+
+    The verdict the vehicle acts on must be identical whether or not the road
+    is walled - otherwise a viewer-facing hint has become a control path.
+    """
+    wall = [_stopped(1, 62.0, -3.0), _stopped(2, 54.4, -0.4),
+            _stopped(3, 58.0, 2.2), _stopped(4, 64.0, 3.6)]
+    sup = SafetySupervisor()
+    args = (0.0, (50.0, 1.8, 0.0, 0.0), wall, _corridor(), EGO_HALF_WIDTH)
+    before = sup.evaluate(*args, 0.05, 1.5)
+    sup.road_blocked(*args)
+    after = sup.evaluate(*args, 0.05, 1.5)
+    assert (before.speed_cap, before.accel_cap) == (after.speed_cap,
+                                                    after.accel_cap)
+
+
 # -- closed loop -----------------------------------------------------------
 def test_the_ego_gets_past_a_parked_car_instead_of_waiting_for_it():
     """End to end: the failure a viewer actually sees, on the smallest scene.

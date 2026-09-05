@@ -46,6 +46,10 @@ class SarathiConfig:
     speed_tau: float = 0.9
     #: Limit on how fast the acceleration command itself may change, m/s^3.
     accel_rate_limit: float = 9.0
+    #: How long the supervisor must report nowhere to go before the viewer is
+    #: told, seconds. Long enough that a verdict flickering across three ticks
+    #: never puts a banner on screen.
+    blocked_hint_after: float = 1.5
     #: Ablation switches, used by the study in B6.
     use_risk_field: bool = True
     use_multimodal_prediction: bool = True
@@ -92,6 +96,8 @@ class SarathiController(EgoController):
         self._prev_s_ddot = 0.0
         self._prev_accel = 0.0
         self._debug_cache: dict = {}
+        #: When the supervisor first reported nowhere to go, or None.
+        self._blocked_since: float | None = None
 
     def reset(self, scenario) -> None:
         self._reset_state()
@@ -183,7 +189,12 @@ class SarathiController(EgoController):
                 self.params.width / 2.0, dt, accel)
             accel = verdict.accel_cap
 
-        self._debug_cache = self._debug(decision, best, verdict, solution)
+        # Asked every tick but answered cheaply: it returns at once unless the
+        # vehicle has actually come to rest.
+        blocked, blocker = self.safety.road_blocked(
+            speed, ego_frenet, self.tracks, corridor, self.params.width / 2.0)
+        self._debug_cache = self._debug(decision, best, verdict, solution, t,
+                                        blocked, blocker)
         return ControlCommand(
             float(np.clip(accel, -self.params.b_max, self.params.a_max)),
             float(np.clip(steer, -max_steer_for(AgentClass.CAR),
@@ -300,7 +311,8 @@ class SarathiController(EgoController):
                                                         ego_r + r))
         return best
 
-    def _debug(self, decision, plan, verdict, solution) -> dict:
+    def _debug(self, decision, plan, verdict, solution, t: float,
+               blocked: bool = False, blocker=None) -> dict:
         out = {
             "planner": self.name,
             "behaviour": decision.state.value,
@@ -323,4 +335,22 @@ class SarathiController(EgoController):
                                  if np.isfinite(verdict.speed_cap) else None)
             out["safety_binding"] = verdict.binding_reason
             out["safety_intervened"] = verdict.intervened
+        # The supervisor has sampled the whole carriageway and found nowhere
+        # clear: the one situation the vehicle cannot solve by itself. Held for
+        # a moment before it is published, because a verdict that flickers
+        # across three ticks is not something to put in front of a viewer.
+        if blocked and self._blocked_since is None:
+            self._blocked_since = t
+        elif not blocked:
+            self._blocked_since = None
+        if self._blocked_since is not None and \
+                t - self._blocked_since >= self.cfg.blocked_hint_after:
+            out["blocked_for"] = round(t - self._blocked_since, 1)
+            if blocker is not None:
+                # Position and class, not the track id: the viewer holds
+                # simulator agents, whose numbering is unrelated to the
+                # tracker's.
+                out["blocked_at"] = [round(float(blocker.x), 2),
+                                     round(float(blocker.y), 2)]
+                out["blocked_cls"] = blocker.cls.value
         return out

@@ -161,6 +161,25 @@ def max_safe_speed_opposite(gap: float, v_other: float, p: RSSParams,
     return max(0.0, (-b + math.sqrt(disc)) / (2.0 * a))
 
 
+#: Below this the vehicle counts as stopped for the blocked report, m/s.
+BLOCKED_SPEED = 0.4
+#: Horizon over which "the road ahead is blocked" is judged, metres.
+BLOCKED_LOOKAHEAD = 18.0
+
+#: How far ahead an obstruction still blocks a lateral escape, metres.
+#:
+#: Deliberately short, and the shortness is the whole point. The test projects
+#: everything in this window onto a single lateral axis, so anything inside it
+#: is treated as though it were abreast of the vehicle. At 12 m that made a car
+#: 12 m ahead and a handcart 5 m ahead - 7 m and several seconds apart - fill
+#: the road between them and report no way through, on a carriageway with 1.7 m
+#: of clear space beside the handcart. Six metres is about the distance covered
+#: before the next decision at the crawl this gates, so what it collapses
+#: together really is roughly abreast. Anything further off is still governed by
+#: the RSS longitudinal term on the approach, and enters this window in time.
+ESCAPE_LOOKAHEAD = 6.0
+
+
 @dataclass
 class SafetyVerdict:
     speed_cap: float
@@ -244,7 +263,8 @@ class SafetySupervisor:
         return SafetyVerdict(cap, allowed, binding, reason, intervened)
 
     def _lateral_escape(self, s_ego: float, d_ego: float, tracks, corridor,
-                        ego_half_width: float) -> bool:
+                        ego_half_width: float,
+                        lookahead: float = ESCAPE_LOOKAHEAD) -> bool:
         """Is there anywhere on this carriageway, beside where we are, to go?
 
         Sampled across the hard corridor bounds at the ego's own arc length: an
@@ -263,7 +283,7 @@ class SafetySupervisor:
         for tr in tracks:
             s, d = corridor.reference.to_frenet(tr.position)
             ds = s - s_ego
-            if -2.0 <= ds <= ESCAPE_LOOKAHEAD:
+            if -2.0 <= ds <= lookahead:
                 need = p.mu_lateral + (p.mu_vru_bonus if tr.cls.is_vru else 0.0)
                 near.append((float(d), tr.width / 2.0 + ego_half_width + need))
         for d_try in np.linspace(lo, hi, 13):
@@ -274,18 +294,39 @@ class SafetySupervisor:
         return False
 
 
-#: How far ahead an obstruction still blocks a lateral escape, metres.
-#:
-#: Deliberately short, and the shortness is the whole point. The test projects
-#: everything in this window onto a single lateral axis, so anything inside it
-#: is treated as though it were abreast of the vehicle. At 12 m that made a car
-#: 12 m ahead and a handcart 5 m ahead - 7 m and several seconds apart - fill
-#: the road between them and report no way through, on a carriageway with 1.7 m
-#: of clear space beside the handcart. Six metres is about the distance covered
-#: before the next decision at the crawl this gates, so what it collapses
-#: together really is roughly abreast. Anything further off is still governed by
-#: the RSS longitudinal term on the approach, and enters this window in time.
-ESCAPE_LOOKAHEAD = 6.0
+    def road_blocked(self, ego_speed: float, ego_frenet, tracks, corridor,
+                     ego_half_width: float):
+        # -> (blocked, nearest blocking track or None)
+        """Is there no clear way across the carriageway ahead at all?
+
+        Reported to whoever is watching, never used for control. It is the one
+        situation the vehicle cannot resolve by itself and the one where a
+        person watching has an option it does not: reaching in and moving
+        whatever is in the way.
+
+        Judged over a longer horizon than the crawl gate above, because this
+        asks a question about the road rather than gating the next metre of
+        travel - and only once the vehicle has actually come to rest, so a
+        vehicle merely slowing for a leader is never reported as walled in.
+        """
+        if ego_speed > BLOCKED_SPEED:
+            return False, None
+        s_ego, d_ego, _, _ = ego_frenet
+        if self._lateral_escape(s_ego, d_ego, tracks, corridor, ego_half_width,
+                                BLOCKED_LOOKAHEAD):
+            return False, None
+        # Name the nearest thing in the way: that is the one a hand reaches for.
+        # The *track* is returned rather than its id, because a track id belongs
+        # to the tracker's own numbering and means nothing to a viewer holding
+        # a list of simulator agents - matching one against the other lands the
+        # marker on whichever unrelated vehicle happens to share the number.
+        nearest, nearest_ds = None, float("inf")
+        for tr in tracks:
+            s, _ = corridor.reference.to_frenet(tr.position)
+            ds = float(s) - float(s_ego)
+            if 0.0 <= ds <= BLOCKED_LOOKAHEAD and ds < nearest_ds:
+                nearest, nearest_ds = tr, ds
+        return True, nearest
 
 
 def _tangent(corridor, s: float) -> np.ndarray:

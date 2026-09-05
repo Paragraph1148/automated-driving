@@ -181,6 +181,30 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
   #scenario-pick{flex:1; min-width:0}
 }
 
+/* --- "Nothing can get past this" prompt -----------------------------------
+   The supervisor can tell the difference between "waiting" and "there is
+   nowhere on this carriageway to go". The second is the one case the vehicle
+   cannot solve by itself, and the one where the viewer has a control the
+   vehicle does not: they can reach in and move the thing that is in the way.
+   Saying so is also the most convincing possible demonstration that the world
+   is live - a recording cannot ask you for help. */
+#blocked{position:absolute; left:50%; transform:translateX(-50%); top:14px;
+  display:flex; align-items:center; gap:10px; max-width:calc(100% - 24px);
+  background:var(--surface-1); border:1px solid var(--crit);
+  border-left:3px solid var(--crit); border-radius:3px; padding:9px 13px;
+  box-shadow:0 6px 20px rgba(10,10,9,.22)}
+#blocked .t{font-family:"IBM Plex Sans Condensed",sans-serif; font-weight:600;
+  font-size:12.5px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--crit); white-space:nowrap}
+#blocked .h{font-size:12.5px; color:var(--ink-2); line-height:1.4}
+#blocked .h b{color:var(--ink-1); font-weight:600}
+@media (max-width:640px){
+  #blocked{flex-direction:column; align-items:flex-start; gap:3px;
+           top:8px; padding:8px 11px}
+  #blocked .t{font-size:11.5px}
+  #blocked .h{font-size:12px}
+}
+
 /* --- First-run tour -------------------------------------------------------
    Everything this page can do is invisible until you try it: the scenario
    list is an unlabelled select in a corner, the palette reads as a legend,
@@ -236,6 +260,10 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
 
   <div id="stage">
     <canvas id="bev"></canvas>
+    <div id="blocked" hidden>
+      <span class="t">Road blocked</span>
+      <span class="h" id="blocked-hint"></span>
+    </div>
     <div class="overlay">
       <div class="chip">tracked <b id="m-tracks">0</b></div>
       <div class="chip">feasible <b id="m-feas">0</b></div>
@@ -357,6 +385,9 @@ const RUN = JSON.parse(document.getElementById("run-data").textContent);
 const LIVE = RUN.mode === "live";
 let frames = RUN.frames || [], scene = RUN.scene || {};
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+//: Whether this is a touch device, so prompts name a gesture that exists here.
+const TOUCH = window.matchMedia("(hover: none)").matches ||
+              (navigator.maxTouchPoints || 0) > 0;
 
 const VEHICLE = new Set(["car","bus","truck","auto_rickshaw","parked_vehicle"]);
 const VRU     = new Set(["two_wheeler","bicycle","pedestrian","pushcart"]);
@@ -563,6 +594,18 @@ function draw(){
     }
   }
 
+  // The road user the supervisor named as the one with nowhere past it, marked
+  // where the *tracker* believes it is - which is what the vehicle is reacting
+  // to. Drawn before the bodies so the ring sits under them, not over the paint.
+  const blockedAt = (f.debug||{}).blocked_at;
+  if (blockedAt){
+    const c = T(blockedAt[0], blockedAt[1]);
+    const r = Math.max(18, 1.7*scale) * (1 + 0.08*Math.sin(Date.now()/260));
+    ctx.beginPath(); ctx.arc(c[0], c[1], r, 0, Math.PI*2);
+    ctx.strokeStyle = css("--crit"); ctx.lineWidth = 2;
+    ctx.setLineDash([5,4]); ctx.stroke(); ctx.setLineDash([]);
+  }
+
   if (on.truth) for (const a of f.agents){
     const held = heldIds.includes(a.id);
     drawBody(T, a.x, a.y, a.h, a.l, a.w, hueFor(a.cls),
@@ -622,6 +665,25 @@ function updatePanel(f){
     "tile" + (clr!=null && clr<0.3 ? " alert" : clr!=null && clr<0.7 ? " warn" : "");
   document.getElementById("m-lat").textContent =
     num(LIVE ? d.replan_ms : RUN.latency_p95, 1);
+
+  // Blocked: say what is in the way, and what the viewer can do about it -
+  // which is more than the vehicle can.
+  const banner = document.getElementById("blocked");
+  if (d.blocked_for != null){
+    const what = (d.blocked_cls || "vehicle").replace(/_/g," ");
+    // Only name a gesture this device actually has. Removal is shift-click,
+    // which does not exist on touch, so a touch viewer is told about the drag
+    // and nothing else rather than being sent after a key they have not got.
+    const remove = TOUCH ? "" : " — or shift-click it to remove it";
+    document.getElementById("blocked-hint").innerHTML = LIVE
+      ? `No clear path across the whole carriageway for ${d.blocked_for.toFixed(0)} s. `
+        + `<b>Drag the ${what}</b> aside${remove} — and watch the vehicle re-plan.`
+      : `No clear path across the whole carriageway — the vehicle held for `
+        + `${d.blocked_for.toFixed(0)} s behind the ${what}.`;
+    banner.hidden = false;
+  } else {
+    banner.hidden = true;
+  }
   if (!LIVE){
     document.getElementById("clock").textContent = `${f.t.toFixed(1)} s`;
     document.getElementById("scrub").value = idx;
@@ -805,6 +867,7 @@ function startLive(){
     const msg = JSON.parse(ev.data);
     if (msg.meta){
       scene = msg.meta.scene;
+      document.getElementById("blocked").hidden = true;
       document.getElementById("m-scenario").textContent =
         msg.meta.scenario.replace(/_/g," ");
       document.getElementById("m-chaos").textContent = num(msg.meta.chaos,2);
