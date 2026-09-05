@@ -180,6 +180,78 @@ direction matches the stationary-impact finding exactly.
 weights are not the whole story. Rebalancing them is a safety-policy decision
 rather than a bug fix, which is why it has not been made here.
 
+F1 and F2 below are the two halves of the answer to a vehicle that cannot get
+past something: it tries once by itself, and then it says so.
+
+---
+
+## F1 — Ask the viewer for help when the road is walled off  ✅ done
+
+`SafetySupervisor.road_blocked()` answers, explicitly, "is there no clear way
+across the carriageway ahead?" — sampled across the corridor, over a longer
+horizon than the crawl gate, and only once the vehicle has come to rest so that
+slowing for a leader is never reported as being walled in. When it holds for
+1.5 s the viewer gets a banner naming the road user in the way and the gesture
+that clears it, plus a pulsing ring on that road user.
+
+It is reported, never used for control, and a test pins that the verdict is
+identical whether or not it is called.
+
+Two things worth knowing:
+
+* It could not be read off the `boxed-in` branch of the standoff rule. On a
+  walled test road the binding rule at the moment the vehicle gave up was
+  `leader:parked_vehicle`, so a hint hung off `boxed-in` never appeared at all.
+* It returns the **track**, not a track id. Track ids belong to the tracker's
+  own numbering, and the viewer holds simulator agents — matching one against
+  the other put the marker on an unrelated vehicle 40 m up the road and named
+  the wrong class in the banner.
+
+The report is built from what the vehicle *perceives*. A rank of vehicles
+abreast at one station occludes itself and the tracker only sees the outermost,
+so such a wall reads as passable. That is correct behaviour, and the test uses
+a staggered wall for the same reason.
+
+## F2 — Reverse out of a dead end  ✅ built, off by default
+
+A kinematic bicycle yaws at `v·tan(δ)/L`, so a stopped vehicle has **no**
+lateral authority at all — it cannot turn on the spot to face a gap. Walled in,
+backing up and re-approaching is the only way it can change the angle it
+presents. It works: on a walled test road the vehicle shunts once, backing from
+s=65.6 to 60.8 and swinging its nose from d=+1.53 to +0.19.
+
+Guards, each of which is a bug that was measured first:
+
+| guard | why |
+|---|---|
+| one shunt per blockage | without it, four shunts in fifty seconds and no progress — it walks backwards down the road |
+| refuse if anything behind is closing | distance is not room: a car 10 m back at 8 m/s leaves 5.8 m of measured gap and covers it in under a second |
+| refuse above 12 agents/100 m | backing into a market is not a manoeuvre; the space behind refills with filtering two-wheelers |
+| `ControlCommand.reverse` | see below |
+
+**The `v_min` bug.** Reverse was first unlocked by lowering `v_min` in the
+integrator. That turns *every hard brake* into a reverse the moment the vehicle
+reaches a standstill — it rolls backwards under a braking command nobody meant
+as one. It cost 20 collisions in which the ego was drifting backwards at a few
+centimetres per second when struck. Reverse is now asked for by the command, not
+permitted by the integrator, and that column reads 0.
+
+**Why it is off by default.** Over 60 benchmark runs:
+
+| | reverse off | reverse on |
+|---|---|---|
+| collision-free | **43/60** | 37/60 |
+| mean progress | 31.4% | 31.0% |
+| mean speed | 0.95 m/s | 0.99 m/s |
+| ego drifting backwards at impact | 0 | 0 |
+
+A six-run difference is about 1.7 standard errors, in the worse direction. The
+manoeuvre is right for the situation it was built for and demonstrably escapes
+one, but it is not established as safe-neutral across the campaign — so it is a
+switch a person turns on (**Thresholds → Ablations → "Reverse out of dead
+ends"**), not a default nobody chose. With it off the campaign is identical to
+before the feature existed: 43/60, 31.4%.
+
 ---
 
 ## Appendix: how the standstill was first spotted

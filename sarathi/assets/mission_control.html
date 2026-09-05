@@ -636,7 +636,7 @@ function draw(){
 
 const STATE_COLOUR = {
   cruise:"--ok", follow:"--ok", overtake:"--ok",
-  nudge:"--warn", creep:"--warn", yield:"--warn",
+  nudge:"--warn", creep:"--warn", yield:"--warn", reverse:"--warn",
   wrong_way_evade:"--crit", emergency_stop:"--crit",
 };
 const num = (v,d=1) => (v===null||v===undefined||!isFinite(v)) ? "—" : Number(v).toFixed(d);
@@ -675,11 +675,19 @@ function updatePanel(f){
     // which does not exist on touch, so a touch viewer is told about the drag
     // and nothing else rather than being sent after a key they have not got.
     const remove = TOUCH ? "" : " — or shift-click it to remove it";
-    document.getElementById("blocked-hint").innerHTML = LIVE
-      ? `No clear path across the whole carriageway for ${d.blocked_for.toFixed(0)} s. `
-        + `<b>Drag the ${what}</b> aside${remove} — and watch the vehicle re-plan.`
-      : `No clear path across the whole carriageway — the vehicle held for `
-        + `${d.blocked_for.toFixed(0)} s behind the ${what}.`;
+    document.getElementById("blocked-hint").innerHTML =
+      // Still trying: it is backing up to come at the blockage from somewhere
+      // else, so say that rather than asking for help it has not yet
+      // established it needs.
+      d.behaviour === "reverse"
+        ? `Backing up to try a different angle — `
+          + `${(d.reverse_left ?? 0).toFixed(1)} m of the shunt left, `
+          + `${(d.reverse_room ?? 0).toFixed(0)} m clear behind.`
+      : LIVE
+        ? `No clear path across the whole carriageway for ${d.blocked_for.toFixed(0)} s. `
+          + `<b>Drag the ${what}</b> aside${remove} — and watch the vehicle re-plan.`
+        : `No clear path across the whole carriageway — the vehicle held for `
+          + `${d.blocked_for.toFixed(0)} s behind the ${what}.`;
     banner.hidden = false;
   } else {
     banner.hidden = true;

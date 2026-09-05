@@ -29,6 +29,7 @@ class Behaviour(str, Enum):
     YIELD = "yield"                    # giving way at a junction or to a VRU
     CREEP = "creep"                    # dense traffic, walking pace, high alertness
     WRONG_WAY_EVADE = "wrong_way_evade"   # rider approaching head-on on our side
+    REVERSE = "reverse"                # back out of a dead end and re-approach
     EMERGENCY_STOP = "emergency_stop"  # stop now
 
 
@@ -56,6 +57,14 @@ class SceneSummary:
     #: Agents per 100 m within the sensing horizon.
     density: float = 0.0
     lattice_infeasible: bool = False
+    #: The supervisor has sampled the whole carriageway ahead and found nowhere
+    #: clear. Not merely "slow leader" - genuinely walled in.
+    road_blocked: bool = False
+    #: Clear road behind, metres, and whether a shunt is permitted at all. The
+    #: controller owns the budget and the cooldown, because they are odometry
+    #: rather than situation, and this layer stays a pure function of the scene.
+    reverse_room: float = 0.0
+    reverse_allowed: bool = False
 
 
 @dataclass
@@ -102,10 +111,28 @@ class BehaviourConfig:
     #: Minimum time in a state before another may be entered, seconds.
     dwell: float = 0.6
 
+    #: Clear road behind needed before a shunt is worth starting, metres. Less
+    #: than this and backing up cannot buy enough room to change the approach.
+    reverse_min_room: float = 3.5
+    #: Agents per 100 m above which reversing is refused outright.
+    #:
+    #: Backing up is a manoeuvre for a quiet dead end - a parked bus on a
+    #: village road - not for a market. In a crowd the space behind is filled
+    #: by filtering two-wheelers a moment after it is measured, and the vehicle
+    #: spends the shunt sitting across the carriageway presenting its flank.
+    #: Measured over 60 benchmark runs with no density guard: seven runs that
+    #: had been collision-free became collisions, in every one of them the ego
+    #: was at a standstill when struck, six of the seven were struck by a
+    #: two-wheeler, and four of the seven were the market scenario alone.
+    reverse_max_density: float = 12.0
+
     creep_speed: float = 2.2
     nudge_speed: float = 4.5
     yield_speed: float = 1.5
     evade_speed: float = 4.0
+    #: Reversing is a manoeuvre of last resort in a place with no room, so it is
+    #: done at walking pace and no faster.
+    reverse_speed: float = 1.0
 
 
 class BehaviourPlanner:
@@ -151,6 +178,18 @@ class BehaviourPlanner:
             if stopped:
                 return Behaviour.CREEP, "boxed in, inching"
             return Behaviour.EMERGENCY_STOP, "no feasible trajectory"
+        # Walled in, at rest, with road behind: back out and re-approach from a
+        # different place. This is what a driver does when the way ahead is
+        # closed, and the vehicle cannot do it any other way - a bicycle model
+        # has no lateral authority at zero speed, so it cannot turn on the spot
+        # to face a gap. Ranked above the evade and yield guards because both of
+        # those resolve to "hold still", which is exactly what has already
+        # failed by the time this fires.
+        if stopped and scene.road_blocked and scene.reverse_allowed and \
+                scene.reverse_room >= cfg.reverse_min_room and \
+                scene.density <= cfg.reverse_max_density:
+            return Behaviour.REVERSE, \
+                f"walled in, {scene.reverse_room:.1f} m behind"
         if scene.wrong_way_gap < cfg.wrong_way_range:
             return Behaviour.WRONG_WAY_EVADE, \
                 f"head-on agent at {scene.wrong_way_gap:.0f} m"
@@ -200,6 +239,14 @@ class BehaviourPlanner:
         limit = min(cfg.desired_speed, scene.speed_limit)
         if state is Behaviour.EMERGENCY_STOP:
             return 0.0, 0.0
+        if state is Behaviour.REVERSE:
+            # Negative, and the controller reads the sign: the lattice samples
+            # forward Frenet polynomials only, so a reversing vehicle is driven
+            # directly rather than through it. The bias aims the *nose* at the
+            # side with room, so the shunt ends facing somewhere useful instead
+            # of merely further back.
+            return -cfg.reverse_speed, scene.free_side
+
         if state is Behaviour.WRONG_WAY_EVADE:
             # Move away from the ego's own side, where the wrong-way rider is,
             # and slow enough that the manoeuvre is survivable if they mirror it.

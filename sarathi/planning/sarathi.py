@@ -50,11 +50,33 @@ class SarathiConfig:
     #: told, seconds. Long enough that a verdict flickering across three ticks
     #: never puts a banner on screen.
     blocked_hint_after: float = 1.5
+    #: How far one shunt may take the vehicle back, metres.
+    reverse_distance: float = 5.0
+    #: Standoff kept behind while reversing, metres. The same idea as the
+    #: forward one and for the same reason: stop with room, not against a bumper.
+    reverse_standoff: float = 1.5
+    #: Wait this long after a shunt before another is allowed, seconds.
+    reverse_cooldown: float = 8.0
+    #: Ground the vehicle must gain past the place it was walled in before a
+    #: second shunt is allowed there, metres. A shunt is an attempt to change
+    #: the angle of approach; if the vehicle is stuck at the same place again,
+    #: the attempt failed and repeating it just walks backwards down the road.
+    reverse_progress_needed: float = 2.0
     #: Ablation switches, used by the study in B6.
     use_risk_field: bool = True
     use_multimodal_prediction: bool = True
     use_safety_supervisor: bool = True
     use_derived_reference: bool = True
+    #: Whether the vehicle may back out of a dead end at all.
+    #:
+    #: Off by default, and the measurement is the reason. Over 60 benchmark runs
+    #: it moved mean speed 0.95 -> 0.99 m/s and progress 31.4% -> 31.0%, while
+    #: collision-free runs went 43/60 -> 37/60 - about 1.7 standard errors, in
+    #: the worse direction. Reversing is the right move in the situation it was
+    #: built for, and it demonstrably escapes one, but it is not established as
+    #: safe-neutral across the campaign, so it is a switch a person turns on
+    #: rather than a default nobody chose.
+    use_reverse: bool = False
 
 
 class SarathiController(EgoController):
@@ -98,6 +120,14 @@ class SarathiController(EgoController):
         self._debug_cache: dict = {}
         #: When the supervisor first reported nowhere to go, or None.
         self._blocked_since: float | None = None
+        #: Metres of the current shunt still unspent, and when the next one may
+        #: begin. Odometry belongs here rather than in the behaviour layer,
+        #: which stays a pure function of the scene it is handed.
+        self._reverse_left = 0.0
+        self._reverse_ok_at = -1e9
+        self._reversing = False
+        #: Arc length at which the last shunt was started, or None.
+        self._reverse_block_s: float | None = None
 
     def reset(self, scenario) -> None:
         self._reset_state()
@@ -133,7 +163,26 @@ class SarathiController(EgoController):
                                 self.predictions, corridor, solution,
                                 speed_limit, self.params.width / 2.0)
         scene.min_ttc = self._min_ttc(ego, corridor)
+        # Whether the way ahead is genuinely closed, and what room there is to
+        # back out of it. Both are cheap - road_blocked returns at once unless
+        # the vehicle has come to rest - and both must be known before the
+        # behaviour layer chooses, not after.
+        half_w = self.params.width / 2.0
+        blocked, blocker = self.safety.road_blocked(
+            speed_now := max(ego.state.speed, 0.0), ego_frenet, self.tracks,
+            corridor, half_w)
+        scene.road_blocked = blocked
+        if blocked:
+            scene.reverse_room = self.safety.reverse_room(
+                ego_frenet, self.tracks, corridor, half_w)
+            scene.reverse_allowed = (cfg.use_reverse
+                                     and self._reverse_allowed(t, float(s_ego)))
         decision = self.behaviour.decide(scene, t)
+
+        if decision.state is Behaviour.REVERSE:
+            return self._reverse(ego, corridor, scene, decision, solution, t,
+                                 dt, blocked, blocker)
+        self._end_reverse(t)
 
         # 3. Local trajectory, in the derived reference frame.
         rs, rd = self.reference.to_frenet(ego.state.position)
@@ -152,7 +201,6 @@ class SarathiController(EgoController):
         self._margin_relief = relief
         # Lateral room available around the derived reference, expressed in that
         # reference's own frame, so the lattice only ever proposes in-road offsets.
-        half_w = self.params.width / 2.0
         d_lo_c, d_hi_c = corridor.hard_bounds_at(s_ego)
         limits = (float(d_lo_c) + half_w - d_ego + rd,
                   float(d_hi_c) - half_w - d_ego + rd)
@@ -189,10 +237,6 @@ class SarathiController(EgoController):
                 self.params.width / 2.0, dt, accel)
             accel = verdict.accel_cap
 
-        # Asked every tick but answered cheaply: it returns at once unless the
-        # vehicle has actually come to rest.
-        blocked, blocker = self.safety.road_blocked(
-            speed, ego_frenet, self.tracks, corridor, self.params.width / 2.0)
         self._debug_cache = self._debug(decision, best, verdict, solution, t,
                                         blocked, blocker)
         return ControlCommand(
@@ -200,6 +244,91 @@ class SarathiController(EgoController):
             float(np.clip(steer, -max_steer_for(AgentClass.CAR),
                           max_steer_for(AgentClass.CAR))),
             self._debug_cache)
+
+    # -- reversing ---------------------------------------------------------
+    def _reverse(self, ego, corridor, scene, decision, solution, t: float,
+                 dt: float, blocked: bool, blocker) -> ControlCommand:
+        """Back out of a dead end, aiming the nose at the side with room.
+
+        The lattice samples forward Frenet polynomials only, so a reversing
+        vehicle cannot be planned through it and is driven directly instead.
+        The safety supervisor is bypassed for the same reason - it answers a
+        question about the road *ahead* - and replaced by the one constraint
+        that applies here: how much clear road is behind, which
+        :meth:`SafetySupervisor.reverse_room` measures from the same tracks.
+
+        A kinematic bicycle yaws at ``v tan(delta) / L``. With ``v`` negative
+        the same steering angle turns the body the other way, so the sign is
+        flipped to put the nose where the room is. That is the point of
+        reversing rather than waiting: it is the only way this vehicle can
+        change the angle it presents to a blockage, having no lateral authority
+        at all while stopped.
+        """
+        cfg = self.cfg
+        speed = float(ego.state.speed)
+        if not self._reversing:                      # a fresh shunt begins
+            self._reversing = True
+            self._reverse_block_s = float(
+                corridor.reference.to_frenet(ego.state.position)[0])
+            self._reverse_left = max(
+                0.0, min(cfg.reverse_distance,
+                         scene.reverse_room - cfg.reverse_standoff))
+        # Spend the budget on ground actually covered, in either direction, so a
+        # shunt cannot be extended by drifting about inside it.
+        self._reverse_left = max(0.0, self._reverse_left - abs(speed) * dt)
+
+        # Never reverse further than the room measured behind, whatever the
+        # budget says: the room is what the supervisor can still vouch for.
+        room = max(0.0, scene.reverse_room - cfg.reverse_standoff)
+        target = -min(abs(decision.target_speed), room / max(cfg.speed_tau, 1e-3))
+        if self._reverse_left <= 0.0:
+            target = 0.0
+
+        accel = float(np.clip((target - speed) / cfg.speed_tau,
+                              -self.params.b_max, self.params.a_max))
+        self._prev_accel = accel
+        self._prev_s_ddot = 0.0
+        self._prev_d_ddot = 0.0
+        self.plan = None
+
+        steer = (float(np.clip(-decision.d_bias, -1.0, 1.0))
+                 * max_steer_for(AgentClass.CAR) * 0.8)
+
+        self._debug_cache = self._debug(decision, None, None, solution, t,
+                                        blocked, blocker)
+        self._debug_cache["reverse_left"] = round(self._reverse_left, 2)
+        self._debug_cache["reverse_room"] = round(scene.reverse_room, 2)
+        return ControlCommand(accel, steer, self._debug_cache, reverse=True)
+
+    def _reverse_allowed(self, t: float, s_ego: float) -> bool:
+        """Whether a shunt may run this tick - starting one, or continuing it.
+
+        Once started it runs until the budget is spent, and spending it is what
+        ends the state: without that the guard would keep choosing REVERSE at
+        zero target speed for ever, which is the same standstill by another
+        name.
+
+        Starting a *second* one at the same place is refused. A shunt is an
+        attempt to change the angle of approach, so if the vehicle is walled in
+        at the same arc length again the attempt failed, and repeating it walks
+        the vehicle backwards down the road one blockage at a time - measured
+        against a full-width wall, four shunts in fifty seconds and no progress.
+        Past that point the way out is not the vehicle's to find, and the viewer
+        is being told so on screen.
+        """
+        if self._reversing:
+            return self._reverse_left > 0.0
+        if t < self._reverse_ok_at:
+            return False
+        return (self._reverse_block_s is None
+                or s_ego > self._reverse_block_s + self.cfg.reverse_progress_needed)
+
+    def _end_reverse(self, t: float) -> None:
+        """Leaving the state closes the shunt and starts the cooldown."""
+        if self._reversing:
+            self._reversing = False
+            self._reverse_left = 0.0
+            self._reverse_ok_at = t + self.cfg.reverse_cooldown
 
     # -- stages ------------------------------------------------------------
     def _perceive(self, ego, view, corridor, d_ego: float) -> None:
