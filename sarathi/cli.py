@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     run.set_defaults(func=cmd_run)
 
     srv = sub.add_parser("serve", help="run the live interactive demo")
-    srv.add_argument("--scenario", default="village_road_unmarked")
+    srv.add_argument("--scenario", default="highway_merge_slow")
     srv.add_argument("--chaos", type=float, default=None)
     srv.add_argument("--seed", type=int, default=None)
     srv.add_argument("--port", type=int, default=8420,
