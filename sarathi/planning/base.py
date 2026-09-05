@@ -33,6 +33,14 @@ class EgoController:
 
     name = "controller"
 
+    def forget(self, points) -> None:
+        """Objects at these world points have been removed from the scene.
+
+        Optional. A controller with a perception stack should drop whatever it
+        believes is there, because no sensor can tell a deleted object from an
+        occluded one and coasting is the right answer for the second.
+        """
+
     def reset(self, scenario) -> None:
         """Called once before a run. Override to build maps, paths, caches."""
 

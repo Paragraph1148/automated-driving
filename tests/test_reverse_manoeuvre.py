@@ -215,15 +215,18 @@ def test_the_viewer_is_told_once_the_vehicle_has_run_out_of_ideas():
         "walled in with nothing left to try, and the viewer is not told"
 
 
-def test_reversing_is_off_unless_someone_turns_it_on():
-    """It is a switch a person chooses, not a default nobody did.
+def test_reversing_is_on_by_default_and_costs_nothing_measurable():
+    """It was off, and the reason turned out not to be the manoeuvre.
 
-    Over 60 benchmark runs it moved mean speed 0.95 -> 0.99 m/s while
-    collision-free runs went 43/60 -> 37/60 - about 1.7 standard errors, in the
-    worse direction. Right for the situation it was built for; not established
-    as safe-neutral across the campaign.
+    With reverse enabled, collision-free runs fell 43/60 to 37/60 and two of
+    those collisions had the ego moving - so it shipped behind a switch. That
+    cost belonged to the risk field: a parked car whose heading had been
+    latched from noise laid a 9.3 m wall across the road, so the vehicle was
+    forever boxed in, forever shunting, and forever sitting across the
+    carriageway while it did. With that fixed the same 60 runs give 42/60
+    either way and zero collisions with the ego moving.
     """
-    assert SarathiConfig().use_reverse is False
+    assert SarathiConfig().use_reverse is True
     raw = {
         "name": "wall_default", "duration": 26.0, "dt": 0.05,
         "chaos": 0.0, "seed": 3,
@@ -239,7 +242,8 @@ def test_reversing_is_off_unless_someone_turns_it_on():
                                 (74.0, 2.2), (76.0, 3.6))],
         "traffic_flow": [],
     }
-    sim = Simulator(scenario_from_dict(raw), SarathiController(),
+    off = SarathiConfig(use_reverse=False)
+    sim = Simulator(scenario_from_dict(raw), SarathiController(off),
                     record=False, live=True)
     speeds = []
     for _ in range(int(26.0 / sim.dt)):

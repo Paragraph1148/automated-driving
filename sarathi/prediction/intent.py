@@ -120,7 +120,7 @@ class IntentPredictor:
         # A stationary object's tracked velocity is filter noise. Propagating it
         # makes the predicted path wander, which then defines a direction from
         # nothing - so treat it as genuinely still.
-        if tr.speed < STATIONARY_SPEED:
+        if not tr.is_moving:
             s_dot = d_dot = 0.0
 
         priors = self._priors(tr, s_dot)
@@ -163,7 +163,16 @@ class IntentPredictor:
         if np.all(moving):
             return headings
 
-        if tr.has_heading or tr.speed >= STATIONARY_SPEED:
+        # Only an *earned* heading is worth having here - one the track fixed
+        # from ground it actually covered. Consulting the instantaneous speed as
+        # well, at any threshold, reintroduces the spin this function exists to
+        # stop: a parked car's filtered velocity crosses and recrosses the
+        # threshold on noise, so the kernel alternates between the road and
+        # whichever way the noise points, and an anisotropic kernel that
+        # alternates sweeps. A genuinely moving track earns its heading within
+        # about a metre, and before that its predicted path is moving anyway,
+        # so ``moving`` is true and this fallback is not consulted at all.
+        if tr.has_heading:
             fallback = np.full_like(headings, float(tr.heading))
         else:
             # Never seen it move: assume it is aligned with the road it sits on.

@@ -137,7 +137,8 @@ def test_class_belief_accumulates_rather_than_flip_flopping():
 
 # -- prediction -----------------------------------------------------------
 def _track(cls, vx, vy=0.0, conf=0.95):
-    return Track(id=1, x=40, y=1.5, vx=vx, vy=vy,
+    # Established, not newborn: see the note in tests/test_risk_field.py.
+    return Track(id=1, x=40, y=1.5, vx=vx, vy=vy, hits=10, age=1.0,
                  P=np.diag([0.2, 0.2, 1.0, 1.0]), cls=cls, cls_confidence=conf)
 
 

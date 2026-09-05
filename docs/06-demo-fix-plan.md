@@ -88,13 +88,41 @@ regression shows up as a number rather than as an argument.
 11. **A pulsing live dot**, because "live" as a grey 12 px word is the one claim
     on the page nobody takes at face value.
 
-## P2 — Mobile interaction  ⬜ not started
+## P2 — Mobile interaction  ✅ done
 
-12. Remove is shift-click, which does not exist on touch — needs an eraser mode
-    or a long-press.
-13. No zoom or pan on any device — pinch, wheel, and buttons.
-14. Phone layout: give the canvas the screen and move the controls into a
-    bottom sheet with Drop / Tune / Layers tabs.
+12. **Removing a road user** was shift-click, and no phone has a shift key.
+    Now: **hold** a road user for 550 ms to remove it, or turn on **Erase** and
+    tap. Shift-click still works. A press that wanders more than 12 px is a
+    drag, not a hold — a thumb is not a mouse.
+13. **Zoom and pan**, which did not exist on any device. Pinch, wheel, and a
+    button cluster; drag the empty road to pan. Zooming is anchored on the
+    cursor or the pinch midpoint, so the thing you are pointing at stays under
+    your finger. A chip shows the factor and the reset only appears once there
+    is something to reset.
+14. **Phone layout**: the road is `position: sticky` at the top and the
+    controls scroll under it — adjusting a threshold and watching what it does
+    to the vehicle is the point of the panel, and it is impossible if moving
+    the slider scrolls the road off screen. The rail is split into
+    Status / Drop / Tune / Layers behind a tab bar **fixed to the bottom of the
+    viewport**, because a bar that scrolls with the rail is gone exactly when
+    it is wanted.
+
+Two bugs found while building it, both mine:
+
+* The forward transform and its inverse were **duplicate copies of the same six
+  lines**. Adding zoom and pan to one of them would have put every drop and
+  every drag a little way from where it was aimed. They now come from one
+  `viewParams()`.
+* `[hidden]` loses to an explicit `display` on specificity, and `.tabs`,
+  `#blocked` and `.zoomers` all set one. The tab bar appeared on desktop, and
+  **the blocked banner could never have disappeared once the road cleared**.
+  Fixed with a `[hidden]{display:none!important}` reset, and the clearing is
+  now verified end to end.
+
+Verified in a real browser at 390×844 and 1440×900, on the live page and the
+`file://` replay artifact: tap-to-place, hold-to-remove and pinch-to-zoom all
+drive the world through the same socket a viewer uses, no page errors, and no
+horizontal overflow.
 
 ---
 
@@ -251,6 +279,84 @@ one, but it is not established as safe-neutral across the campaign — so it is 
 switch a person turns on (**Thresholds → Ablations → "Reverse out of dead
 ends"**), not a default nobody chose. With it off the campaign is identical to
 before the feature existed: 43/60, 31.4%.
+
+---
+
+## B1-B4 — Four bugs reported from the live deployment  ✅ done
+
+All four were about **stationary objects**, and all four ended with the vehicle
+stopped in the road. A stationary object is the hard case for a tracker, not
+the easy one: its filtered velocity is noise with metres per second of standard
+deviation and its filtered position random-walks, so every quantity derived
+from either is suspect. Each bug was one such quantity being trusted.
+
+### The heading has to be earned, and can be lost
+
+It was fixed from the instantaneous filtered velocity, which for a parked car
+is whichever way the noise pointed, and nothing ever revised it. Measured on a
+parked car beside an otherwise empty road: **+100.7°** to a road it was
+parallel to. The risk kernels are anisotropic, so that laid the car's 4.65 m
+core half-length *across* the carriageway and turned a 4.2 m car into a **9.3 m
+wall** — which is exactly the "red field placed vertically instead of
+horizontally like the bus" in the report.
+
+A heading is now fixed from ground actually covered — a metre, within two
+seconds, and significant against the track's own position uncertainty — and a
+full window without covering it clears the heading again.
+
+### Motion is judged against the noise that could have produced it
+
+Two frames after a parked car is first detected, its velocity reads **2.15 m/s
+at 85°** to the road with a stated sigma of 0.79. A velocity from two noisy
+positions is not an observation of motion however small its covariance claims
+to be, so `is_moving` now wants three sigma *and* four hits. Deliberately
+independent of whether the track has a heading: a vehicle first seen closing at
+14 m/s is moving on its first frame and has not yet covered the ground that
+fixes its orientation.
+
+### The world can say that something has ceased to exist
+
+Coasting is right when a vehicle is hidden behind a bus — no sensor
+distinguishes occluded from gone. But here things really are removed, when a
+viewer erases one or the simulator clears one the vehicle has touched, and no
+sensor can observe that either. Measured: **100%** of the risk cells sitting
+more than 12 m from any road user were within 6 m of a track with no agent
+behind it, up to **13%** of the hot cells in a frame. Now **none**. That is the
+"red field with no vehicle in it".
+
+### The trajectory fan is centred on the vehicle, not on the reference
+
+Past a lateral span from the reference — exactly what getting around an
+obstruction requires — every sampled offset lay on the reference side, so
+"hold this offset" was not among the options and the whole fan steered back
+into the thing just avoided.
+
+### Two rendering and geometry errors alongside
+
+With Follow **off** the risk grid was rotated by `+heading` where the
+composition with the y-flip needs `−heading`. And time-to-collision laid each
+track's collision discs along that same unearned heading.
+
+### Measured
+
+| | before | after |
+|---|---|---|
+| one parked car, empty road | stopped level with it for the whole run | **goal at 190 m in 22.9 s** |
+| trajectories rejected as collisions there | 49 of 60, safety cap "clear" | — |
+| kernel angle error, stationary, `village_road_unmarked` | 18.5° mean, 16% over 30° | **6.9° mean, 6%** |
+| ...for bodies over 4 m long | 12.4° | **2.4°** |
+| risk cells orphaned from any road user | up to 13% of a frame | **0%** |
+| campaign, 60 runs | 43/60 collision-free, 31.4% | 42/60, **31.8%**, and the **first completed run** of any arm |
+
+### And it changed the answer on reverse
+
+Reverse shipped switched off because enabling it took collision-free runs from
+43/60 to 37/60, two of them with the ego moving. **That cost belonged to the
+risk field, not to the manoeuvre**: with a 9.3 m phantom wall across the road
+the vehicle was forever boxed in, forever shunting, and sitting across the
+carriageway while it did. With these fixes in, the same 60 runs give **42/60
+either way and zero collisions with the ego moving**, so reverse is now **on by
+default**.
 
 ---
 
