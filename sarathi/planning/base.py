@@ -17,6 +17,15 @@ class ControlCommand:
     accel: float                      # m/s^2, longitudinal
     steer: float                      # rad, front-wheel angle
     debug: dict = field(default_factory=dict)
+    #: Whether the planner is deliberately reversing this tick.
+    #:
+    #: Reverse has to be *asked for*, not merely permitted by the integrator.
+    #: Allowing negative speed unconditionally turns every hard brake into a
+    #: reverse the moment the vehicle reaches a standstill: it rolls backwards
+    #: under a braking command nobody meant as one. That cost eight
+    #: collision-free runs out of sixty, and in every one of them the ego was
+    #: struck while drifting backwards at a few centimetres a second.
+    reverse: bool = False
 
 
 class EgoController:

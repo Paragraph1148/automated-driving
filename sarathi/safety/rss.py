@@ -60,6 +60,23 @@ class RSSParams:
     min_standoff: float = 2.0
     #: A leader below this speed counts as stopped for the standoff rule.
     standoff_leader_speed: float = 1.0
+    #: Speed still permitted inside the standoff when a way past exists, m/s.
+    #:
+    #: The standoff used to clamp the cap to a hard zero here, which turned the
+    #: rule into the exact failure it was written to prevent. A kinematic
+    #: bicycle yaws at ``v tan(delta) / L``: at zero speed the steering has no
+    #: authority whatsoever, so a vehicle forbidden to move can never turn out
+    #: from behind the thing it is stopped behind. It waits instead - and a
+    #: parked car, a barricade or a cow that has sat down never moves. Measured
+    #: on village_road_unmarked before this: the ego stood still for 23-79% of
+    #: every run, in stretches of up to 32 seconds, and never once reached its
+    #: goal. Every single zero cap was this rule.
+    #:
+    #: A crawl restores the authority (1 m/s is ~15 deg/s of yaw) and gives up
+    #: nothing: the RSS term is still evaluated on the true gap and still
+    #: reaches zero on its own below about 0.45 m, so this can only ever govern
+    #: inside the standoff band, never at the point of contact.
+    standoff_crawl: float = 1.2
 
 
 #: Braking we may assume a leading agent is capable of. Assuming a leader can
@@ -144,6 +161,38 @@ def max_safe_speed_opposite(gap: float, v_other: float, p: RSSParams,
     return max(0.0, (-b + math.sqrt(disc)) / (2.0 * a))
 
 
+#: Half the ego's own body length, metres - subtracted from every measured
+#: longitudinal gap so that gaps are bumper to bumper.
+EGO_HALF_LENGTH = 2.1
+#: Below this the vehicle counts as stopped for the blocked report, m/s.
+BLOCKED_SPEED = 0.4
+#: Clear road behind that is treated as "as much as we could ever want", metres.
+REVERSE_ROOM_MAX = 30.0
+#: Anything behind closing faster than this refuses the shunt outright, m/s.
+#: Distance alone is not room: a car 10 m back doing 8 m/s leaves 5.8 m of
+#: measured gap and covers it in under a second, and a vehicle reversing into
+#: it is the one that caused the collision. Measured over 60 benchmark runs,
+#: reversing on a static-distance check alone cost six collision-free runs.
+REVERSE_CLOSING_SPEED = 1.0
+#: How far back to look for traffic closing on us, metres.
+REVERSE_CLOSING_RANGE = 30.0
+#: Horizon over which "the road ahead is blocked" is judged, metres.
+BLOCKED_LOOKAHEAD = 18.0
+
+#: How far ahead an obstruction still blocks a lateral escape, metres.
+#:
+#: Deliberately short, and the shortness is the whole point. The test projects
+#: everything in this window onto a single lateral axis, so anything inside it
+#: is treated as though it were abreast of the vehicle. At 12 m that made a car
+#: 12 m ahead and a handcart 5 m ahead - 7 m and several seconds apart - fill
+#: the road between them and report no way through, on a carriageway with 1.7 m
+#: of clear space beside the handcart. Six metres is about the distance covered
+#: before the next decision at the crawl this gates, so what it collapses
+#: together really is roughly abreast. Anything further off is still governed by
+#: the RSS longitudinal term on the approach, and enters this window in time.
+ESCAPE_LOOKAHEAD = 6.0
+
+
 @dataclass
 class SafetyVerdict:
     speed_cap: float
@@ -168,6 +217,9 @@ class SafetySupervisor:
         cap = float("inf")
         binding: int | None = None
         reason = "clear"
+        #: Whether anywhere else on the carriageway is clear. Only the standoff
+        #: rule needs it, so it is computed at most once and only when asked.
+        escape: bool | None = None
 
         for tr in tracks:
             s, d = corridor.reference.to_frenet(tr.position)
@@ -181,7 +233,7 @@ class SafetySupervisor:
             if lateral_gap > required_lateral:
                 continue        # laterally clear, so longitudinally irrelevant
 
-            gap = ds - 2.1 - tr.length / 2.0
+            gap = ds - EGO_HALF_LENGTH - tr.length / 2.0
             b_other = LEADER_BRAKING.get(tr.cls, 5.0)
 
             # Sign of the along-corridor velocity decides which rule applies.
@@ -194,8 +246,14 @@ class SafetySupervisor:
                                                       b_other)
                 why = "leader"
                 if v_along < p.standoff_leader_speed and gap < p.min_standoff:
-                    limit = 0.0
-                    why = "standoff"
+                    if escape is None:
+                        escape = self._lateral_escape(s_ego, d_ego, tracks,
+                                                      corridor, ego_half_width)
+                    # Hold at a dead stop only when there is genuinely nowhere
+                    # to go. Otherwise keep the crawl that gives the steering
+                    # any authority at all - see ``standoff_crawl``.
+                    limit = min(limit, p.standoff_crawl) if escape else 0.0
+                    why = "standoff" if escape else "boxed-in"
             if limit < cap:
                 cap, binding, reason = limit, tr.id, f"{why}:{tr.cls.value}"
 
@@ -216,6 +274,108 @@ class SafetySupervisor:
         if intervened:
             self.interventions += 1
         return SafetyVerdict(cap, allowed, binding, reason, intervened)
+
+    def reverse_room(self, ego_frenet, tracks, corridor,
+                     ego_half_width: float) -> float:
+        """Clear road behind the vehicle, bumper to bumper, in metres.
+
+        The supervisor looks only forwards - ``evaluate`` skips everything with
+        ``ds <= 0`` - because a vehicle that only ever drives forwards cannot
+        hit what is behind it. A vehicle that may reverse can, so backing up
+        needs its own answer, computed the same way and from the same tracks.
+
+        The start of the corridor counts as an obstruction too: reversing off
+        the end of the road is not an escape from anything.
+        """
+        s_ego, d_ego, _, _ = ego_frenet
+        room = min(REVERSE_ROOM_MAX, max(0.0, float(s_ego)))
+        for tr in tracks:
+            s, d = corridor.reference.to_frenet(tr.position)
+            ds = float(s) - float(s_ego)
+            if ds >= 0.0:
+                continue
+            lateral = abs(float(d) - float(d_ego)) - (ego_half_width
+                                                      + tr.width / 2.0)
+            required = self.p.mu_lateral + (self.p.mu_vru_bonus
+                                            if tr.cls.is_vru else 0.0)
+            if lateral > required:
+                continue               # laterally clear, so not behind us
+            # Anything catching us up takes the whole manoeuvre off the table.
+            # A gap is only room if it will still be there: backing into
+            # approaching traffic makes the reversing vehicle the cause of the
+            # collision, which is the one outcome this layer exists to prevent.
+            v_along = float(tr.velocity @ _tangent(corridor, s))
+            if -ds <= REVERSE_CLOSING_RANGE and v_along > REVERSE_CLOSING_SPEED:
+                return 0.0
+            gap = -ds - EGO_HALF_LENGTH - tr.length / 2.0
+            room = min(room, max(0.0, gap))
+        return float(room)
+
+    def _lateral_escape(self, s_ego: float, d_ego: float, tracks, corridor,
+                        ego_half_width: float,
+                        lookahead: float = ESCAPE_LOOKAHEAD) -> bool:
+        """Is there anywhere on this carriageway, beside where we are, to go?
+
+        Sampled across the hard corridor bounds at the ego's own arc length: an
+        offset counts as an escape if every track that could reach it is
+        laterally clear of it by this class's required margin. Deliberately a
+        question about the *road*, not about the plan - the supervisor must be
+        able to answer it without trusting anything upstream, which is the whole
+        reason it exists.
+        """
+        p = self.p
+        d_lo, d_hi = corridor.hard_bounds_at(s_ego)
+        lo, hi = float(d_lo) + ego_half_width, float(d_hi) - ego_half_width
+        if hi <= lo:
+            return False               # road narrower than the vehicle
+        near = []
+        for tr in tracks:
+            s, d = corridor.reference.to_frenet(tr.position)
+            ds = s - s_ego
+            if -2.0 <= ds <= lookahead:
+                need = p.mu_lateral + (p.mu_vru_bonus if tr.cls.is_vru else 0.0)
+                near.append((float(d), tr.width / 2.0 + ego_half_width + need))
+        for d_try in np.linspace(lo, hi, 13):
+            if abs(d_try - d_ego) < 0.15:
+                continue               # where we already are is not an escape
+            if all(abs(d_try - d) >= reach for d, reach in near):
+                return True
+        return False
+
+
+    def road_blocked(self, ego_speed: float, ego_frenet, tracks, corridor,
+                     ego_half_width: float):
+        # -> (blocked, nearest blocking track or None)
+        """Is there no clear way across the carriageway ahead at all?
+
+        Reported to whoever is watching, never used for control. It is the one
+        situation the vehicle cannot resolve by itself and the one where a
+        person watching has an option it does not: reaching in and moving
+        whatever is in the way.
+
+        Judged over a longer horizon than the crawl gate above, because this
+        asks a question about the road rather than gating the next metre of
+        travel - and only once the vehicle has actually come to rest, so a
+        vehicle merely slowing for a leader is never reported as walled in.
+        """
+        if ego_speed > BLOCKED_SPEED:
+            return False, None
+        s_ego, d_ego, _, _ = ego_frenet
+        if self._lateral_escape(s_ego, d_ego, tracks, corridor, ego_half_width,
+                                BLOCKED_LOOKAHEAD):
+            return False, None
+        # Name the nearest thing in the way: that is the one a hand reaches for.
+        # The *track* is returned rather than its id, because a track id belongs
+        # to the tracker's own numbering and means nothing to a viewer holding
+        # a list of simulator agents - matching one against the other lands the
+        # marker on whichever unrelated vehicle happens to share the number.
+        nearest, nearest_ds = None, float("inf")
+        for tr in tracks:
+            s, _ = corridor.reference.to_frenet(tr.position)
+            ds = float(s) - float(s_ego)
+            if 0.0 <= ds <= BLOCKED_LOOKAHEAD and ds < nearest_ds:
+                nearest, nearest_ds = tr, ds
+        return True, nearest
 
 
 def _tangent(corridor, s: float) -> np.ndarray:

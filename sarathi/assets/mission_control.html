@@ -1,3 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Without this the page is laid out at a 980px virtual viewport and scaled
+     down: a 390px phone reports window.innerWidth === 980, so the mobile
+     breakpoint below never fires and a phone gets the desktop two-column
+     layout at 40% size. The doctype matters for the same reason - the page
+     was rendering in quirks mode (document.compatMode === "BackCompat")
+     everywhere, phone and desktop alike. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SARATHI Mission Control</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -141,13 +150,105 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
   .app{grid-template-columns:1fr; grid-template-rows:auto minmax(280px,46vh) auto auto; height:auto}
   aside{max-height:none}
 }
-@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+/* Phones. Until the viewport meta above existed none of this could fire: the
+   page was laid out at 980px and scaled down, so a 390px screen never met a
+   max-width query it was actually narrow enough for. */
+@media (max-width:640px){
+  body{font-size:15px}
+  header{padding:10px 14px; gap:10px}
+  /* The tagline costs a fifth of the screen to say what the wordmark and the
+     first tour card already say. */
+  .tagline{display:none}
+  .scenario{margin-left:0; width:100%; gap:14px}
+  .app{grid-template-rows:auto minmax(260px,42vh) auto auto}
+  aside{padding:14px 14px 20px; gap:16px}
+  .overlay{left:10px; bottom:10px; gap:6px}
+  .chip{font-size:11px; padding:4px 7px}
+  /* Touch targets. 11.5px type in a 7px-padded button is a 28px tap area. */
+  button{font-size:12.5px; padding:11px 14px; min-height:44px}
+  .palette{grid-template-columns:1fr 1fr; gap:8px}
+  .palette button{min-height:46px}
+  .layers label{padding:7px 0; min-height:34px}
+  .layers input{width:20px; height:20px}
+  .knob input[type=range]{height:28px}
+  footer{padding:9px 14px; gap:10px; flex-wrap:wrap}
+  footer .clock{font-size:12px}
+  /* The picker gets the whole row on a phone. It is the control nobody finds,
+     and cramming it into a shared row is what hid it in the first place -
+     a non-wrapping 446 px row on a 390 px screen also made Chrome widen the
+     layout viewport to 505 px and zoom the entire page out to fit. */
+  #scenario-wrap{flex:1 1 100%; min-width:0}
+  #scenario-pick{flex:1; min-width:0}
+}
+
+/* --- "Nothing can get past this" prompt -----------------------------------
+   The supervisor can tell the difference between "waiting" and "there is
+   nowhere on this carriageway to go". The second is the one case the vehicle
+   cannot solve by itself, and the one where the viewer has a control the
+   vehicle does not: they can reach in and move the thing that is in the way.
+   Saying so is also the most convincing possible demonstration that the world
+   is live - a recording cannot ask you for help. */
+#blocked{position:absolute; left:50%; transform:translateX(-50%); top:14px;
+  display:flex; align-items:center; gap:10px; max-width:calc(100% - 24px);
+  background:var(--surface-1); border:1px solid var(--crit);
+  border-left:3px solid var(--crit); border-radius:3px; padding:9px 13px;
+  box-shadow:0 6px 20px rgba(10,10,9,.22)}
+#blocked .t{font-family:"IBM Plex Sans Condensed",sans-serif; font-weight:600;
+  font-size:12.5px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--crit); white-space:nowrap}
+#blocked .h{font-size:12.5px; color:var(--ink-2); line-height:1.4}
+#blocked .h b{color:var(--ink-1); font-weight:600}
+@media (max-width:640px){
+  #blocked{flex-direction:column; align-items:flex-start; gap:3px;
+           top:8px; padding:8px 11px}
+  #blocked .t{font-size:11.5px}
+  #blocked .h{font-size:12px}
+}
+
+/* --- First-run tour -------------------------------------------------------
+   Everything this page can do is invisible until you try it: the scenario
+   list is an unlabelled select in a corner, the palette reads as a legend,
+   and nothing says the world is being computed rather than replayed. Shown
+   a demo cold, a viewer reported back "it's one scene with pre-set traffic",
+   having found none of it. This is the fix. */
+#tour{position:fixed; inset:0; z-index:60; font-size:14px}
+.tour-ring{position:absolute; border-radius:3px; border:2px solid var(--accent);
+  box-shadow:0 0 0 9999px rgba(10,10,9,.62); pointer-events:none;
+  transition:top .22s ease, left .22s ease, width .22s ease, height .22s ease}
+.tour-card{position:absolute; width:min(340px, calc(100vw - 24px));
+  background:var(--surface-1); border:1px solid var(--line); border-radius:3px;
+  box-shadow:0 10px 34px rgba(10,10,9,.34); padding:15px 17px 13px}
+.tour-card h3{margin:2px 0 6px; font-family:"IBM Plex Sans Condensed",sans-serif;
+  font-size:17px; font-weight:600; letter-spacing:.02em; color:var(--ink-1)}
+.tour-card p{margin:0; color:var(--ink-2); font-size:13.5px; line-height:1.52}
+.tour-card p b{color:var(--ink-1); font-weight:600}
+.tour-count{font-family:"IBM Plex Mono",monospace; font-size:10.5px;
+  letter-spacing:.1em; color:var(--accent); text-transform:uppercase}
+.tour-nav{display:flex; align-items:center; gap:8px; margin-top:13px}
+.tour-nav .spacer{flex:1}
+.tour-nav button{padding:7px 13px}
+.tour-dots{display:flex; gap:5px}
+.tour-dots i{width:6px; height:6px; border-radius:50%; background:var(--line)}
+.tour-dots i.on{background:var(--accent)}
+#tour-open{padding:5px 10px; font-size:11px; margin-left:2px}
+.live-dot{width:7px; height:7px; border-radius:50%; background:var(--ok);
+  display:inline-block; margin-right:5px; vertical-align:baseline;
+  animation:live-pulse 1.9s ease-in-out infinite}
+@keyframes live-pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media (max-width:640px){
+  /* A card that chases a target around a 390px screen is unreadable. Pin it. */
+  .tour-card{position:fixed; left:8px; right:8px; bottom:10px; width:auto}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}
+  .tour-ring{transition:none} .live-dot{animation:none}}
 </style>
 
 <div class="app">
   <header>
     <div>
-      <div class="wordmark">Sara<span>thi</span></div>
+      <div class="wordmark">Sara<span>thi</span>
+        <button id="tour-open" hidden title="What can this page do?">Guide</button>
+      </div>
       <div class="tagline">Adaptive path planning on unstructured Indian roads — what the planner sees, predicts and chooses, every tick.</div>
     </div>
     <div class="scenario">
@@ -159,6 +260,10 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
 
   <div id="stage">
     <canvas id="bev"></canvas>
+    <div id="blocked" hidden>
+      <span class="t">Road blocked</span>
+      <span class="h" id="blocked-hint"></span>
+    </div>
     <div class="overlay">
       <div class="chip">tracked <b id="m-tracks">0</b></div>
       <div class="chip">feasible <b id="m-feas">0</b></div>
@@ -182,7 +287,7 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
         <div class="tile"><span class="eyebrow">Target</span><div><span class="v" id="m-target">0.0</span><span class="u">m/s</span></div></div>
         <div class="tile" id="tile-ttc"><span class="eyebrow">Min TTC</span><div><span class="v" id="m-ttc">∞</span><span class="u">s</span></div></div>
         <div class="tile" id="tile-clr"><span class="eyebrow">Path clearance</span><div><span class="v" id="m-clr">—</span><span class="u">m</span></div></div>
-        <div class="tile"><span class="eyebrow">Replan</span><div><span class="v" id="m-lat">—</span><span class="u">ms</span></div></div>
+        <div class="tile" title="How long the frame you are looking at took to plan. It is being computed now, not replayed."><span class="eyebrow">Replan</span><div><span class="v" id="m-lat">—</span><span class="u">ms</span></div></div>
         <div class="tile"><span class="eyebrow">Plan risk</span><div><span class="v" id="m-risk">—</span></div></div>
       </div>
     </div>
@@ -220,6 +325,7 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
         <div><span class="shape" style="background:var(--veh)"></span> Vehicles — car, bus, truck, auto</div>
         <div><span class="shape" style="background:var(--vru);height:6px"></span> Vulnerable — two-wheeler, cycle, pedestrian, cart</div>
         <div><span class="shape" style="background:var(--animal);height:8px"></span> Animals — cattle, stray dogs</div>
+        <div><span class="shape" style="background:var(--animal);height:8px;border-radius:6px"></span> …rounded: settled in the road</div>
         <div><span class="shape" style="background:var(--furniture);height:5px"></span> Static — barricades, parked</div>
       </div>
       <div style="margin-top:14px">
@@ -231,10 +337,17 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
   </aside>
 
   <footer>
-    <span id="live-controls" hidden style="display:flex;gap:10px;align-items:center;flex:1">
-      <select id="scenario-pick" aria-label="Scenario"
-              style="font:inherit;font-size:12.5px;padding:6px 8px;border-radius:2px;
-                     background:var(--surface-2);color:var(--ink-1);border:1px solid var(--line)"></select>
+    <span id="live-controls" hidden
+          style="display:flex;gap:10px;align-items:center;flex:1;flex-wrap:wrap">
+      <span id="scenario-wrap" style="display:flex;align-items:center;gap:7px">
+        <span class="eyebrow" style="display:inline">Road</span>
+        <select id="scenario-pick" aria-label="Choose a scenario"
+                style="font:inherit;font-size:12.5px;padding:7px 8px;border-radius:2px;
+                       background:var(--surface-2);color:var(--ink-1);
+                       border:1px solid var(--line);min-height:38px;
+                       max-width:210px"></select>
+        <span class="clock" id="scenario-count" style="color:var(--ink-3)"></span>
+      </span>
       <button id="rate-live">1×</button>
       <span class="clock" id="live-clock">0.0 s</span>
       <span class="clock" id="live-status" style="color:var(--ok)">connecting…</span>
@@ -247,6 +360,23 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
   </footer>
 </div>
 
+<div id="tour" hidden>
+  <div class="tour-ring" id="tour-ring"></div>
+  <div class="tour-card" id="tour-card" role="dialog" aria-modal="true"
+       aria-labelledby="tour-title">
+    <span class="tour-count" id="tour-count"></span>
+    <h3 id="tour-title"></h3>
+    <p id="tour-body"></p>
+    <div class="tour-nav">
+      <button id="tour-skip">Skip</button>
+      <span class="spacer"></span>
+      <span class="tour-dots" id="tour-dots"></span>
+      <button id="tour-prev">Back</button>
+      <button id="tour-next">Next</button>
+    </div>
+  </div>
+</div>
+
 <script id="run-data" type="application/json">__RUN_DATA__</script>
 <script>
 (function(){
@@ -255,6 +385,9 @@ const RUN = JSON.parse(document.getElementById("run-data").textContent);
 const LIVE = RUN.mode === "live";
 let frames = RUN.frames || [], scene = RUN.scene || {};
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+//: Whether this is a touch device, so prompts name a gesture that exists here.
+const TOUCH = window.matchMedia("(hover: none)").matches ||
+              (navigator.maxTouchPoints || 0) > 0;
 
 const VEHICLE = new Set(["car","bus","truck","auto_rickshaw","parked_vehicle"]);
 const VRU     = new Set(["two_wheeler","bicycle","pedestrian","pushcart"]);
@@ -290,12 +423,25 @@ const cv = document.getElementById("bev"), ctx = cv.getContext("2d");
 let scale = 7, follow = true, playing = false, rate = 1, idx = 0, dpr = 1;
 const riskCanvas = document.createElement("canvas"); const riskCtx = riskCanvas.getContext("2d");
 
+// Metres of road the view tries to hold. In follow mode the ego heads right,
+// so the long axis carries distance ahead and the short axis carries the
+// carriageway's cross-section.
+const VIEW_ACROSS = 26;      // m of road width plus verge, vertically
+const VIEW_AHEAD_MAX = 95;   // m of road ahead on a wide screen
+const VIEW_AHEAD_MIN = 46;   // ...and on a narrow one
+
 function resize(){
   dpr = Math.min(window.devicePixelRatio || 1, 2);
   const r = cv.parentElement.getBoundingClientRect();
   cv.width = Math.max(1, r.width*dpr); cv.height = Math.max(1, r.height*dpr);
   cv.style.width = r.width+"px"; cv.style.height = r.height+"px";
-  scale = Math.max(4, Math.min(11, r.width/95));
+  // Scale from *both* axes. Deriving it from the width alone asked a phone to
+  // hold 95 m of road across 390 px, which drew a 4 m carriageway 17 px tall -
+  // too small to read and far too small to hit with a thumb. A narrow screen
+  // shows less road ahead instead of shrinking everything on it.
+  const ahead = Math.max(VIEW_AHEAD_MIN, Math.min(VIEW_AHEAD_MAX, r.width/8));
+  scale = Math.max(4, Math.min(11, Math.min(r.width/ahead,
+                                            r.height/VIEW_ACROSS)));
   draw();
 }
 window.addEventListener("resize", resize);
@@ -355,8 +501,22 @@ function drawRisk(f, T){
   ctx.restore();
 }
 
-function drawBody(T, x, y, h, len, wid, fill, ring, ringWidth){
+function drawBody(T, x, y, h, len, wid, fill, ring, ringWidth, resting){
   const hl = len/2, hw = wid/2, c = Math.cos(h), s = Math.sin(h);
+  const mid = T(x, y), nose = T(x + hl*c, y + hl*s);
+  if (resting){
+    // An animal that has settled in the road is drawn as a rounded body with
+    // no heading tick: it is not going anywhere, and a cow lying in the
+    // carriageway is a different hazard from one walking across it. T is a
+    // rigid transform with a uniform scale, so the screen angle comes straight
+    // from where the nose landed.
+    const ang = Math.atan2(nose[1]-mid[1], nose[0]-mid[0]);
+    ctx.beginPath();
+    ctx.ellipse(mid[0], mid[1], hl*scale, hw*scale, ang, 0, Math.PI*2);
+    ctx.fillStyle = fill; ctx.fill();
+    if (ring){ ctx.strokeStyle = ring; ctx.lineWidth = ringWidth||1.25; ctx.stroke(); }
+    return;
+  }
   const pts = [[hl,hw],[hl,-hw],[-hl,-hw],[-hl,hw]].map(([a,b]) =>
     T(x + a*c - b*s, y + a*s + b*c));
   ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
@@ -365,7 +525,6 @@ function drawBody(T, x, y, h, len, wid, fill, ring, ringWidth){
   ctx.fillStyle = fill; ctx.fill();
   if (ring){ ctx.strokeStyle = ring; ctx.lineWidth = ringWidth||1.25; ctx.stroke(); }
   // Heading tick, so direction of travel reads without animation.
-  const nose = T(x + hl*c, y + hl*s), mid = T(x, y);
   ctx.beginPath(); ctx.moveTo(mid[0],mid[1]); ctx.lineTo(nose[0],nose[1]);
   ctx.strokeStyle = ring || fill; ctx.lineWidth = 1; ctx.stroke();
 }
@@ -435,10 +594,23 @@ function draw(){
     }
   }
 
+  // The road user the supervisor named as the one with nowhere past it, marked
+  // where the *tracker* believes it is - which is what the vehicle is reacting
+  // to. Drawn before the bodies so the ring sits under them, not over the paint.
+  const blockedAt = (f.debug||{}).blocked_at;
+  if (blockedAt){
+    const c = T(blockedAt[0], blockedAt[1]);
+    const r = Math.max(18, 1.7*scale) * (1 + 0.08*Math.sin(Date.now()/260));
+    ctx.beginPath(); ctx.arc(c[0], c[1], r, 0, Math.PI*2);
+    ctx.strokeStyle = css("--crit"); ctx.lineWidth = 2;
+    ctx.setLineDash([5,4]); ctx.stroke(); ctx.setLineDash([]);
+  }
+
   if (on.truth) for (const a of f.agents){
     const held = heldIds.includes(a.id);
     drawBody(T, a.x, a.y, a.h, a.l, a.w, hueFor(a.cls),
-             held ? css("--accent") : css("--surface-1"), held ? 2.5 : 1);
+             held ? css("--accent") : css("--surface-1"), held ? 2.5 : 1,
+             !!a.rest);
     if (held){
       const c = T(a.x, a.y);
       ctx.beginPath(); ctx.arc(c[0], c[1], Math.max(14, 1.1*scale), 0, Math.PI*2);
@@ -464,7 +636,7 @@ function draw(){
 
 const STATE_COLOUR = {
   cruise:"--ok", follow:"--ok", overtake:"--ok",
-  nudge:"--warn", creep:"--warn", yield:"--warn",
+  nudge:"--warn", creep:"--warn", yield:"--warn", reverse:"--warn",
   wrong_way_evade:"--crit", emergency_stop:"--crit",
 };
 const num = (v,d=1) => (v===null||v===undefined||!isFinite(v)) ? "—" : Number(v).toFixed(d);
@@ -493,6 +665,33 @@ function updatePanel(f){
     "tile" + (clr!=null && clr<0.3 ? " alert" : clr!=null && clr<0.7 ? " warn" : "");
   document.getElementById("m-lat").textContent =
     num(LIVE ? d.replan_ms : RUN.latency_p95, 1);
+
+  // Blocked: say what is in the way, and what the viewer can do about it -
+  // which is more than the vehicle can.
+  const banner = document.getElementById("blocked");
+  if (d.blocked_for != null){
+    const what = (d.blocked_cls || "vehicle").replace(/_/g," ");
+    // Only name a gesture this device actually has. Removal is shift-click,
+    // which does not exist on touch, so a touch viewer is told about the drag
+    // and nothing else rather than being sent after a key they have not got.
+    const remove = TOUCH ? "" : " — or shift-click it to remove it";
+    document.getElementById("blocked-hint").innerHTML =
+      // Still trying: it is backing up to come at the blockage from somewhere
+      // else, so say that rather than asking for help it has not yet
+      // established it needs.
+      d.behaviour === "reverse"
+        ? `Backing up to try a different angle — `
+          + `${(d.reverse_left ?? 0).toFixed(1)} m of the shunt left, `
+          + `${(d.reverse_room ?? 0).toFixed(0)} m clear behind.`
+      : LIVE
+        ? `No clear path across the whole carriageway for ${d.blocked_for.toFixed(0)} s. `
+          + `<b>Drag the ${what}</b> aside${remove} — and watch the vehicle re-plan.`
+        : `No clear path across the whole carriageway — the vehicle held for `
+          + `${d.blocked_for.toFixed(0)} s behind the ${what}.`;
+    banner.hidden = false;
+  } else {
+    banner.hidden = true;
+  }
   if (!LIVE){
     document.getElementById("clock").textContent = `${f.t.toFixed(1)} s`;
     document.getElementById("scrub").value = idx;
@@ -583,6 +782,7 @@ function buildTuning(tunables, values){
   for (const section of sections){
     const d = document.createElement("details");
     d.className = "tune";
+    d.dataset.section = section;
     if (section === "Driving") d.open = true;
     d.innerHTML = `<summary>${section}</summary>`;
     const body = document.createElement("div");
@@ -653,6 +853,12 @@ function startLive(){
   });
 
   const status = document.getElementById("live-status");
+  // A pulsing dot, because "live" as a grey 12px word is the one claim on this
+  // page nobody takes at face value - and the one that matters most.
+  const setStatus = (text, ok) => {
+    status.innerHTML = ok ? `<span class="live-dot"></span>${text}` : text;
+    status.style.color = ok ? "" : "var(--crit)";
+  };
   // Same origin, same port, upgraded at /ws. Deriving the scheme from the page
   // rather than hardcoding ws:// is what lets this run behind TLS at all: an
   // https page is forbidden from opening a plaintext ws:// socket, so a
@@ -662,16 +868,14 @@ function startLive(){
   const url = location.host ? `${wsProto}//${location.host}/ws`
                             : "ws://localhost:8420/ws";
   ws = new WebSocket(url);
-  ws.addEventListener("open", () => {
-    status.textContent = "live"; status.style.color = ""; });
-  ws.addEventListener("close", () => {
-    status.textContent = "disconnected"; status.style.color = "var(--crit)"; });
-  ws.addEventListener("error", () => {
-    status.textContent = "no server"; status.style.color = "var(--crit)"; });
+  ws.addEventListener("open", () => setStatus("live", true));
+  ws.addEventListener("close", () => setStatus("disconnected", false));
+  ws.addEventListener("error", () => setStatus("no server", false));
   ws.addEventListener("message", ev => {
     const msg = JSON.parse(ev.data);
     if (msg.meta){
       scene = msg.meta.scene;
+      document.getElementById("blocked").hidden = true;
       document.getElementById("m-scenario").textContent =
         msg.meta.scenario.replace(/_/g," ");
       document.getElementById("m-chaos").textContent = num(msg.meta.chaos,2);
@@ -685,6 +889,8 @@ function startLive(){
           send({cmd:"load", scenario: pick.value}));
       }
       pick.value = msg.meta.scenario;
+      document.getElementById("scenario-count").textContent =
+        `${pick.selectedIndex + 1}/${pick.options.length}`;
       buildTuning(msg.meta.tunables, msg.meta.values);
       return;
     }
@@ -707,7 +913,7 @@ function startLive(){
     heldIds = msg.held || [];
     document.getElementById("live-clock").textContent = `${msg.t.toFixed(1)} s`;
     // Everyone shares one world, so say so when somebody else is in it.
-    status.textContent = msg.viewers > 1 ? `live · ${msg.viewers} watching` : "live";
+    setStatus(msg.viewers > 1 ? `live · ${msg.viewers} watching` : "live", true);
     document.getElementById("m-outcome").textContent = "running";
     draw();
   });
@@ -785,14 +991,193 @@ function startLive(){
   });
 }
 
+// --------------------------------------------------------------------------
+// The guided tour.
+//
+// The capabilities this page has are all invisible at rest: the scenario list
+// is an unlabelled select in the bottom corner, the palette reads as a colour
+// legend rather than as something you click, and nothing on screen says the
+// world is being computed rather than replayed. Shown the demo cold, a viewer
+// reported back that it was "one scene with pre-set traffic" - having found
+// none of it. Six cards, once, remembered, re-openable from the header.
+// --------------------------------------------------------------------------
+const TOUR_KEY = "sarathi.tour.v1";
+const TOUR = [
+  {t:"You are watching this being computed",
+   // On a phone the whole page scrolls, and the live indicator lives in the
+   // footer - pointing at it would scroll the road off screen to open the
+   // tour on a legend. Point at the world instead, which is the claim.
+   sel:"#live-status", selNarrow:"#stage", live:true,
+   b:"Nothing here is a recording. The full stack \u2014 perception, "+
+     "multi-hypothesis prediction, the risk field, the trajectory search "+
+     "\u2014 is running in Python on the server and streaming to you. "+
+     "<b>Replan</b> in the telemetry is how many milliseconds the frame you "+
+     "are looking at took to decide."},
+  {t:"Ten roads, not one scene",
+   sel:"#scenario-wrap", live:true,
+   b:"An unmarked village road, a narrow bridge with oncoming traffic, an "+
+     "unsignalled junction, a night highway of wrong-way riders, a school "+
+     "zone, a market street. Pick one and the whole world reloads around "+
+     "the same planner."},
+  {t:"Put something in its way",
+   sel:"#palette", live:true,
+   b:"Pick a road user, then click or tap anywhere on the road to drop it "+
+     "in. A cow, a rider coming at you the wrong way, a barricade. The "+
+     "planner has <b>no foreknowledge</b> of anything you place \u2014 it has "+
+     "to see it, guess what it will do, and get around it, live."},
+  {t:"Drag anything, including the car",
+   sel:"#bev", live:true,
+   b:"Grab any vehicle and move it while the world keeps running. Drop a "+
+     "bus across the lane and watch the trajectory search go red. "+
+     "Shift-click removes a road user."},
+  {t:"Change how it thinks, mid-drive",
+   sel:"#tune-panel", live:true,
+   b:"Every threshold that shapes the behaviour is a live control. Shorten "+
+     "the follow headway, widen the gap it needs before it will overtake, "+
+     "raise how much clearance counts as squeezing past. It re-plans on the "+
+     "next tick."},
+  {t:"Break it on purpose",
+   sel:"details.tune[data-section=\"Ablations\"]", live:true,
+   b:"Switch the risk field, the multi-hypothesis prediction or the safety "+
+     "envelope off and watch what the vehicle stops being able to do. That "+
+     "is the argument for the architecture, and you can run it yourself."},
+
+  {t:"One recorded run, frame by frame",
+   sel:"#scrub", replay:true,
+   b:"This is a recording of a single run. Scrub the timeline, or press "+
+     "space to play. Every number on the right is what the planner actually "+
+     "held at that instant \u2014 not a summary written afterwards."},
+  {t:"See what it was working from",
+   sel:"#layers", replay:true,
+   b:"Switch on the risk field, the prediction cones and the candidate fan "+
+     "to see the evidence behind each decision: what it thought was "+
+     "dangerous, where it thought everyone was going, and which of the "+
+     "trajectories it considered were survivable."},
+];
+
+function tourStore(read, value){
+  // Private windows and blocked site data throw on access, not on read.
+  try { return read ? localStorage.getItem(TOUR_KEY)
+                    : localStorage.setItem(TOUR_KEY, value); }
+  catch (e) { return null; }
+}
+
+const tourEl = document.getElementById("tour");
+const tourRing = document.getElementById("tour-ring");
+const tourCard = document.getElementById("tour-card");
+let tourSteps = [], tourAt = 0;
+
+const narrowScreen = () => window.matchMedia("(max-width:640px)").matches;
+
+function tourTarget(step){
+  const sel = (narrowScreen() && step.selNarrow) || step.sel;
+  const el = sel && document.querySelector(sel);
+  if (!el || el.hidden || el.offsetParent === null) return null;
+  return el;
+}
+
+function placeTourCard(rect){
+  // Below the target if it fits, above if it does not, centred if there is no
+  // target at all. The phone breakpoint pins the card and ignores all of this.
+  if (narrowScreen()) return;
+  const card = tourCard.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight, pad = 12;
+  if (!rect){
+    tourCard.style.left = Math.round((vw - card.width)/2)+"px";
+    tourCard.style.top = Math.round((vh - card.height)/2)+"px";
+    return;
+  }
+  let top = rect.bottom + pad;
+  if (top + card.height > vh - pad) top = rect.top - card.height - pad;
+  top = Math.max(pad, Math.min(top, vh - card.height - pad));
+  let left = rect.left + rect.width/2 - card.width/2;
+  left = Math.max(pad, Math.min(left, vw - card.width - pad));
+  tourCard.style.left = Math.round(left)+"px";
+  tourCard.style.top = Math.round(top)+"px";
+}
+
+function renderTour(){
+  const step = tourSteps[tourAt];
+  document.getElementById("tour-count").textContent =
+    `Step ${tourAt+1} of ${tourSteps.length}`;
+  document.getElementById("tour-title").textContent = step.t;
+  document.getElementById("tour-body").innerHTML = step.b;
+  document.getElementById("tour-prev").hidden = tourAt === 0;
+  document.getElementById("tour-next").textContent =
+    tourAt === tourSteps.length-1 ? "Done" : "Next";
+  const dots = document.getElementById("tour-dots");
+  dots.innerHTML = tourSteps.map((_, i) =>
+    `<i class="${i===tourAt?"on":""}"></i>`).join("");
+
+  const el = tourTarget(step);
+  if (el) el.scrollIntoView({block:"nearest", behavior:"smooth"});
+  // Measure after the scroll has been asked for, on the next frame, so the
+  // ring lands on where the target actually ended up.
+  requestAnimationFrame(() => {
+    const r = el ? el.getBoundingClientRect() : null;
+    if (r){
+      tourRing.style.left = (r.left-4)+"px"; tourRing.style.top = (r.top-4)+"px";
+      tourRing.style.width = (r.width+8)+"px";
+      tourRing.style.height = (r.height+8)+"px";
+      tourRing.style.borderWidth = "2px";
+    } else {
+      // No target: collapse the ring so its 9999px shadow dims everything.
+      tourRing.style.left = "50%"; tourRing.style.top = "50%";
+      tourRing.style.width = "0px"; tourRing.style.height = "0px";
+      tourRing.style.borderWidth = "0px";
+    }
+    placeTourCard(r);
+  });
+}
+
+function openTour(){
+  tourSteps = TOUR.filter(s => (s.live ? LIVE : s.replay ? !LIVE : true))
+                  .filter(s => !s.sel || tourTarget(s));
+  if (!tourSteps.length) return;
+  tourAt = 0; tourEl.hidden = false; renderTour();
+  document.getElementById("tour-next").focus();
+}
+
+function closeTour(){
+  tourEl.hidden = true;
+  tourStore(false, "seen");
+}
+
+document.getElementById("tour-open").addEventListener("click", openTour);
+document.getElementById("tour-skip").addEventListener("click", closeTour);
+document.getElementById("tour-prev").addEventListener("click", () => {
+  if (tourAt > 0){ tourAt--; renderTour(); } });
+document.getElementById("tour-next").addEventListener("click", () => {
+  if (tourAt < tourSteps.length-1){ tourAt++; renderTour(); } else closeTour(); });
+addEventListener("keydown", e => {
+  if (tourEl.hidden) return;
+  if (e.key === "Escape"){ e.preventDefault(); closeTour(); }
+  if (e.key === "ArrowRight"){ e.preventDefault();
+    document.getElementById("tour-next").click(); }
+  if (e.key === "ArrowLeft"){ e.preventDefault();
+    document.getElementById("tour-prev").click(); }
+});
+addEventListener("resize", () => { if (!tourEl.hidden) renderTour(); });
+
+function offerTour(){
+  const usable = TOUR.some(s => (s.live ? LIVE : s.replay ? !LIVE : true));
+  if (!usable) return;
+  document.getElementById("tour-open").hidden = false;
+  // First visit only. Deferred a beat so the tuning panel has been built from
+  // the server's schema and the ablations step has something to point at.
+  if (tourStore(true) !== "seen") setTimeout(openTour, LIVE ? 1200 : 400);
+}
+
 if (LIVE){
   startLive();
   resize();
+  offerTour();
 } else {
   document.getElementById("m-scenario").textContent = (RUN.scenario||"—").replace(/_/g," ");
   document.getElementById("m-chaos").textContent = num(RUN.chaos,2);
   document.getElementById("m-outcome").textContent = RUN.outcome||"—";
   resize();
+  offerTour();
 }
 })();
 </script>

@@ -115,6 +115,8 @@ TUNABLES: list[Tunable] = [
     Tunable("ablate.use_derived_reference", "Corridor-derived reference",
             "Ablations", "bool",
             help="Off: the reference ignores obstructions"),
+    Tunable("ablate.use_reverse", "Reverse out of dead ends", "Ablations", "bool",
+            help="On: back up and re-approach when walled in with room behind"),
 ]
 
 _BY_KEY = {t.key: t for t in TUNABLES}

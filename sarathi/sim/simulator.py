@@ -27,6 +27,9 @@ EGO_ID = 0
 OFF_ROAD_TOLERANCE = 0.25
 #: Agents beyond this distance outside the corridor ends are removed.
 DESPAWN_MARGIN = 30.0
+#: Fastest the ego may travel backwards, m/s. Walking pace: a shunt is a
+#: last-resort manoeuvre in a place with no room, never a way of making progress.
+EGO_REVERSE_LIMIT = 1.4
 #: How far a wheeled road user's heading may deviate from its direction of travel
 #: along the road, radians. Generous enough for lane changes and filtering,
 #: tight enough that a U-turn is impossible.
@@ -257,6 +260,8 @@ class Simulator:
             neighbours=view.neighbours_of(agent.id),
             d_min=float(d_min), d_max=float(d_max),
             d_nominal=float(self.corridor.nominal_offset(s)),
+            d_nominal_opposing=float(self.corridor.opposing_offset(s)),
+            road_heading=float(self.corridor.reference.heading_at(s)),
             corridor_length=self.corridor.reference.length,
             speed_limit=self.corridor.comfortable_speed(agent.state.position,
                                                         agent.params.v_desired),
@@ -264,10 +269,24 @@ class Simulator:
         return self.policies[agent.id].act(agent, ctx, self.rng)
 
     def _integrate_ego(self, cmd: ControlCommand) -> None:
+        """Advance the ego, the only agent permitted to travel backwards.
+
+        Backwards travel is unlocked by the command, never by the integrator.
+        Lowering ``v_min`` unconditionally turns every hard brake into a reverse
+        the moment the vehicle reaches a standstill - it rolls back under a
+        braking command nobody meant as one - and that alone cost eight
+        collision-free runs out of sixty, each with the ego struck while
+        drifting backwards at a few centimetres a second.
+
+        The reverse cap is walking pace. Nothing here reverses at speed, and a
+        vehicle that could would be a worse hazard than the blockage it is
+        escaping.
+        """
         p = self.ego.params
         self.ego.state = step_bicycle(
             self.ego.state, cmd.accel, cmd.steer, self.dt,
-            wheelbase_for(p), v_max=p.v_desired * 1.6, v_min=0.0)
+            wheelbase_for(p), v_max=p.v_desired * 1.6,
+            v_min=-EGO_REVERSE_LIMIT if cmd.reverse else 0.0)
 
     def _keep_traffic_on_road(self) -> None:
         """Hold other road users inside the drivable band.
