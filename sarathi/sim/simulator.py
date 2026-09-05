@@ -77,6 +77,11 @@ class Simulator:
         #: their policy and from integration, so the world keeps running around
         #: a vehicle being positioned by hand.
         self.held: set[int] = set()
+        #: World points where an object stopped existing since the last tick -
+        #: erased by the operator, or cleared after contact. Handed to the
+        #: controller so its tracker does not coast a vehicle that is no longer
+        #: anywhere; no sensor can tell that from an occlusion.
+        self.vanished: list[tuple[float, float]] = []
         self.finished = False
         self.outcome = ""
         self._collision_with: str | None = None
@@ -179,7 +184,9 @@ class Simulator:
             if dist < best_dist:
                 best, best_dist = aid, dist
         if best is not None:
-            self.agents[best].active = False
+            agent = self.agents[best]
+            self.vanished.append((float(agent.state.x), float(agent.state.y)))
+            agent.active = False
         return best
 
     def _next_agent_id(self) -> int:
@@ -210,6 +217,11 @@ class Simulator:
                          wall)
 
     def step(self) -> None:
+        # Anything removed since the last tick is reported before the controller
+        # senses, so it never perceives what is no longer there.
+        if self.vanished:
+            self.controller.forget(self.vanished)
+            self.vanished = []
         view = FrenetView(self.corridor, self.agents)
 
         # 1. Ego decision, timed. This is the PS's "replanning latency".
@@ -376,7 +388,11 @@ class Simulator:
                 if self.live:
                     self._record_event("contact", f"{other.cls.value} "
                                        f"at {impact:.1f} m/s")
-                    other.active = False       # clear it so we are not stuck in it
+                    # Clear it so we are not left wedged inside it - and say so,
+                    # or perception coasts a ghost of it right beside the ego.
+                    self.vanished.append((float(other.state.x),
+                                          float(other.state.y)))
+                    other.active = False
                     continue
                 self.outcome = "collision"
                 self._collision_with = other.cls.value

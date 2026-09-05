@@ -39,6 +39,68 @@ MERGE_WEAK_HITS = 5
 #: Below it the estimate is held: at 0.4 m/s a stationary vehicle's velocity is
 #: noise, and its "direction" is whichever way the noise happened to point.
 HEADING_TRUST_SPEED = 1.0
+#: Ground a track must actually cover before its heading is fixed from it, m.
+#:
+#: An instantaneous speed threshold cannot do this job. Velocity is initialised
+#: at variance 25 - five metres a second of standard deviation - so a parked
+#: vehicle's filtered velocity crosses any sane threshold within a tick or two
+#: of being detected, and the heading latched from that noise is whichever way
+#: the noise pointed. Nothing ever unlatched it. Measured on
+#: bus_stop_overtake: six of ten stationary tracks carried a heading more than
+#: 45 degrees wrong, mean error 25 degrees, and on village_road_unmarked 53.
+#: The risk kernels are anisotropic, so an 11 m bus wearing a heading at 60
+#: degrees to the road lays its length across the carriageway.
+#:
+#: Displacement cannot be faked by noise the same way: jitter about a fixed
+#: point does not accumulate into a metre of travel, while anything genuinely
+#: moving covers it in about a second.
+HEADING_TRAVEL = 1.0
+#: How many standard deviations of its own position uncertainty a track must
+#: travel before the direction of that travel means anything.
+#:
+#: A newly detected object's position estimate is still converging and can jump
+#: the better part of a metre between updates on nothing but a revised depth
+#: estimate. Fixing a heading from that jump latches a direction taken from the
+#: filter settling rather than from the object moving, which is how a parked car
+#: came to sit at 85 degrees across a road it was parallel to for the first
+#: seconds of its life.
+HEADING_SIGMAS = 2.0
+#: ...and it must cover that ground within this long, seconds.
+#:
+#: Distance alone is not enough either. A parked vehicle's filtered position
+#: random-walks on detection noise, and given long enough it wanders a metre -
+#: at which point the direction of the wander gets latched as its heading and
+#: never revised. Measured on a parked car beside an empty road: heading
+#: +100.7 degrees, essentially square across a road it was parallel to, which
+#: laid its 4.65 m core half-length across the carriageway and turned a 4.2 m
+#: car into a 9.3 m wall. The ego stopped level with it, 1.58 m clear of it,
+#: reporting the road blocked, and never moved again.
+#:
+#: Together the two mean "averaged at least half a metre per second over a
+#: couple of seconds", which drift cannot fake and anything genuinely
+#: travelling passes without noticing.
+HEADING_WINDOW = 2.0
+#: Speed below which a track counts as stationary rather than travelling, m/s.
+MOVING_SPEED = 0.8
+#: ...or below this many standard deviations of its own velocity uncertainty.
+#:
+#: A fixed threshold is not enough on its own. Velocity is initialised at
+#: variance 25 - five metres per second of standard deviation - so for the first
+#: second of its life a parked car's filtered speed reads in the metres per
+#: second and any fixed threshold calls it moving. It is then predicted rolling
+#: forward, and the heading of that rolled-out path is noise: measured at 85
+#: degrees across a road the car was parallel to.
+MOVING_SIGMAS = 3.0
+#: ...and it must have been seen this many times before its velocity counts.
+#:
+#: The covariance cannot carry this on its own, because early on the filter is
+#: overconfident: two frames after a parked car was first detected its velocity
+#: read 2.15 m/s at 85 degrees to the road with a reported sigma of only 0.79.
+#: A velocity derived from two noisy positions is not an observation of motion
+#: however small its stated uncertainty. Four hits is about 0.4 s, during which
+#: the object is still tracked and still carries its risk kernel - only the
+#: forward projection of it waits.
+MOVING_HITS = 4
 
 #: Per-class log-odds are bounded so a long-lived belief stays correctable. An
 #: unbounded belief at +500 can never be revised by contrary evidence.
@@ -76,6 +138,11 @@ class Track:
     #: downstream, the risk kernel above all, spins with it.
     heading_estimate: float = 0.0
     has_heading: bool = False
+    #: Where the track was when its heading was last fixed, and the track age
+    #: at that moment, for measuring how far it has genuinely travelled since
+    #: and how long it took. ``None`` until the first update.
+    heading_anchor: tuple[float, float] | None = None
+    heading_anchor_age: float = 0.0
 
     @property
     def position(self) -> np.ndarray:
@@ -91,10 +158,44 @@ class Track:
 
     @property
     def heading(self) -> float:
-        """Best available orientation - held, not recomputed from noisy velocity."""
+        """Best available orientation - held, not recomputed from noisy velocity.
+
+        Only meaningful once :attr:`has_heading` is set; until then this is a
+        default rather than an observation, and a consumer that cannot check
+        should be asking the road instead. See :data:`HEADING_TRAVEL`.
+        """
+        if self.has_heading and self.speed < HEADING_TRUST_SPEED:
+            return float(self.heading_estimate)
         if self.speed >= HEADING_TRUST_SPEED:
             return float(math.atan2(self.vy, self.vx))
         return float(self.heading_estimate)
+
+    @property
+    def velocity_sigma(self) -> float:
+        """Scalar velocity uncertainty, from the filter's own covariance."""
+        return float(math.sqrt(max(self.P[2, 2] + self.P[3, 3], 1e-9) / 2.0))
+
+    @property
+    def is_moving(self) -> bool:
+        """Whether this track is genuinely travelling, or merely jittering.
+
+        Measured against the filter's own velocity uncertainty, so that a
+        reading is only motion when it is larger than the noise that could have
+        produced it. Deliberately not a question about whether the track has
+        earned a heading. The two are separate: a vehicle first
+        detected closing at 14 m/s is unambiguously moving on its first frame,
+        and has not yet covered the ground that fixes its orientation. Coupling
+        them would have every newly seen vehicle predicted stationary for its
+        first metre, which is the one metre that matters most.
+
+        Consumers that treat noise as motion do real damage: time-to-collision
+        computed against a stationary car's noise velocity produces a closing
+        speed pointed at the ego often enough to trip the emergency stop, which
+        stops the vehicle, which freezes the geometry that produced the reading.
+        """
+        return (self.hits >= MOVING_HITS
+                and self.speed >= max(MOVING_SPEED,
+                                      MOVING_SIGMAS * self.velocity_sigma))
 
     @property
     def length(self) -> float:
@@ -145,6 +246,40 @@ class Tracker:
             tr.P = F @ tr.P @ F.T + Q
             tr.age += self.dt
 
+    def _update_heading(self, tr: "Track") -> None:
+        """Fix a track's orientation from ground covered, not from velocity.
+
+        See :data:`HEADING_TRAVEL`. The anchor is only advanced when the
+        heading is actually taken from it, so a vehicle creeping forward at
+        0.2 m/s still earns a heading after five seconds rather than never.
+        """
+        if tr.heading_anchor is None:
+            tr.heading_anchor = (tr.x, tr.y)
+            tr.heading_anchor_age = tr.age
+            return
+        dx, dy = tr.x - tr.heading_anchor[0], tr.y - tr.heading_anchor[1]
+        needed = max(HEADING_TRAVEL, HEADING_SIGMAS * tr.position_sigma)
+        if math.hypot(dx, dy) >= needed:
+            tr.heading_estimate = math.atan2(dy, dx)
+            tr.has_heading = True
+        elif tr.age - tr.heading_anchor_age < HEADING_WINDOW:
+            return                      # still earning it
+        else:
+            # A full window without covering the ground is positive evidence
+            # that this thing is not travelling, so any heading it is carrying
+            # was taken from drift and has to go. Nothing cleared it before,
+            # and a heading latched once from a metre of random walk survived
+            # the whole run: a parked car sat at +100.7 degrees to a road it
+            # was parallel to.
+            #
+            # The cost is a vehicle that genuinely parked at an angle, which
+            # now falls back to the road it is parked on. That error is
+            # bounded by how far from parallel a vehicle actually parks; the
+            # error this removes was unbounded.
+            tr.has_heading = False
+        tr.heading_anchor = (tr.x, tr.y)
+        tr.heading_anchor_age = tr.age
+
     # -- update step ------------------------------------------------------
     def update(self, detections: list[Detection]) -> list[Track]:
         self.predict()
@@ -160,9 +295,7 @@ class Tracker:
             tr.misses = 0
             if tr.hits >= CONFIRM_HITS:
                 tr.confirmed = True
-            if tr.speed >= HEADING_TRUST_SPEED:
-                tr.heading_estimate = math.atan2(tr.vy, tr.vx)
-                tr.has_heading = True
+            self._update_heading(tr)
 
         for tr in self.tracks.values():
             if tr.id not in assigned:
@@ -180,6 +313,28 @@ class Tracker:
                        if tr.misses <= MAX_COAST}
         self._merge_duplicates()
         return [tr for tr in self.tracks.values() if tr.confirmed]
+
+    def forget(self, points, radius: float = 3.5) -> int:
+        """Drop tracks for objects that have been removed from the world.
+
+        Coasting exists so that something hidden behind a bus is not forgotten,
+        and that is worth keeping: no sensor can tell "occluded" from "gone", so
+        the safe reading of a missed detection is "still there". But in this
+        sandbox objects really do cease to exist - a viewer erases one, or the
+        simulator clears one the vehicle has touched so it is not left wedged
+        inside it - and no sensor can observe *that* either. So the world says
+        so directly, rather than leaving perception to hallucinate a vehicle
+        that is no longer anywhere.
+
+        It is the difference between a demo that shows a red risk blob sitting
+        over empty road for a second after you delete a car, and one that does
+        not.
+        """
+        gone = [tid for tid, tr in self.tracks.items()
+                if any(math.hypot(tr.x - x, tr.y - y) <= radius for x, y in points)]
+        for tid in gone:
+            del self.tracks[tid]
+        return len(gone)
 
     def _merge_duplicates(self) -> None:
         """Fold together tracks that are clearly the same object.

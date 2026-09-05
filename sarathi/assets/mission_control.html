@@ -580,8 +580,15 @@ function drawRisk(f, T){
   const p0 = T(f.ego.x, f.ego.y);
   ctx.save();
   ctx.translate(p0[0], p0[1]);
-  ctx.rotate(follow ? 0 : f.ego.h);
-  if (follow) ctx.rotate(0);
+  // The grid is in the ego's own frame. Follow mode already turns the world so
+  // the ego points right, so no rotation is wanted there. With follow off the
+  // screen is world-aligned and the grid has to be turned to match - by MINUS
+  // the heading, not plus: the scale(1,-1) below is part of the composition,
+  // and translate . rotate(h) . flipY sends a point 10 m ahead and 4 m left of
+  // a vehicle at 34 degrees to (10.5, 2.3) when the world puts it at
+  // (6.0, -8.9). The risk field was drawn skewed across the road whenever
+  // anyone turned Follow off.
+  ctx.rotate(follow ? 0 : -f.ego.h);
   ctx.scale(1,-1);
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(riskCanvas, g.x0*scale, g.y0*scale,

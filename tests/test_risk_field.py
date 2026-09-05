@@ -30,7 +30,10 @@ def field_for(tracks, cor=None, pred=None):
 
 
 def track(cls, x=40.0, y=1.5, vx=4.0, vy=0.0):
-    return Track(id=1, x=x, y=y, vx=vx, vy=vy,
+    # An *established* track, which is what these tests are about. A velocity
+    # derived from the first two frames of a new one is not an observation of
+    # motion, and Track.is_moving declines to treat it as one.
+    return Track(id=1, x=x, y=y, vx=vx, vy=vy, hits=10, age=1.0,
                  P=np.diag([0.2, 0.2, 1.0, 1.0]), cls=cls, cls_confidence=0.95)
 
 
@@ -142,7 +145,7 @@ def test_boundary_cost_ramps_up_smoothly():
 def test_field_evaluation_is_fast_enough_for_20hz():
     """The planner scores thousands of points per tick inside a 50 ms budget."""
     tracks = [Track(id=i, x=20 + i * 7, y=(-1) ** i * 1.5, vx=8.0, vy=0.0,
-                    P=np.diag([.3, .3, 1., 1.]),
+                    hits=10, age=1.0, P=np.diag([.3, .3, 1., 1.]),
                     cls=[AgentClass.CAR, AgentClass.TWO_WHEELER,
                          AgentClass.CATTLE, AgentClass.BUS,
                          AgentClass.PEDESTRIAN][i % 5], cls_confidence=0.9)

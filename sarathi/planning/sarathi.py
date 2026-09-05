@@ -245,6 +245,16 @@ class SarathiController(EgoController):
                           max_steer_for(AgentClass.CAR))),
             self._debug_cache)
 
+    def forget(self, points) -> None:
+        """The world reports that objects at these points no longer exist.
+
+        Not a perception event: nothing a sensor can measure distinguishes an
+        object that has been deleted from one that is merely hidden. See
+        :meth:`Tracker.forget`.
+        """
+        if points:
+            self.tracker.forget(points)
+
     # -- reversing ---------------------------------------------------------
     def _reverse(self, ego, corridor, scene, decision, solution, t: float,
                  dt: float, blocked: bool, blocker) -> ControlCommand:
@@ -431,9 +441,20 @@ class SarathiController(EgoController):
         ego_centres = ego.state.position[None, :] + ego_offsets[:, None] * axis
         for tr in self.tracks:
             offsets, r = disc_decomposition(tr.length, tr.width)
-            tr_axis = np.array([math.cos(tr.heading), math.sin(tr.heading)])
+            # A track that has never been seen to travel has no heading, and
+            # Track.heading hands back a 0.0 default - world +x, which is the
+            # road only by coincidence. Laying an 11 m bus's collision discs
+            # along the wrong axis puts them across a carriageway they are not
+            # on. Ask the road instead, exactly as the risk kernel does.
+            th = float(tr.heading) if tr.has_heading else \
+                float(corridor.reference.heading_at(
+                    corridor.reference.to_frenet(tr.position)[0]))
+            tr_axis = np.array([math.cos(th), math.sin(th)])
             centres = tr.position[None, :] + offsets[:, None] * tr_axis
-            rel_vel = tr.velocity - ego.state.velocity
+            # A stationary track's velocity is filter noise; closing on it at
+            # noise speed is not a collision course. See Track.is_moving.
+            rel_vel = (tr.velocity if tr.is_moving
+                       else np.zeros(2)) - ego.state.velocity
             for c_e in ego_centres:
                 for c_o in centres:
                     best = min(best, _time_to_collision(c_o - c_e, rel_vel,

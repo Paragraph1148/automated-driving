@@ -323,8 +323,25 @@ class FrenetLatticePlanner:
                                 cfg.curvature_max * travel * travel / 6.0,
                                 cfg.lateral_span)
                 max_shift = max(max_shift, 0.02)
-                desired = np.linspace(-cfg.lateral_span, cfg.lateral_span,
-                                      cfg.lateral_samples) + d_bias
+                # Centre the fan on where the vehicle *is*, and keep the
+                # reference in it as well.
+                #
+                # Sampling only around the reference is fine until the vehicle
+                # is further off it than ``lateral_span`` - which is precisely
+                # what getting around an obstruction requires. Past that every
+                # sampled offset lies on the reference side of ``d0``, so
+                # "hold this offset" is not among the options and every
+                # candidate steers back into the thing just avoided. Measured
+                # alongside a single parked car on an otherwise empty road:
+                # 49 of 60 candidates rejected for collision, every survivor a
+                # stay-put trajectory, and the vehicle stopped level with the
+                # car and never moved again for the rest of the run.
+                desired = np.concatenate([
+                    d0 + d_bias + np.linspace(-cfg.lateral_span,
+                                              cfg.lateral_span,
+                                              cfg.lateral_samples),
+                    [d0, d_bias],
+                ])
                 offsets = d0 + np.clip(desired - d0, -max_shift, max_shift)
                 if lateral_limits is not None:
                     lo, hi = lateral_limits
