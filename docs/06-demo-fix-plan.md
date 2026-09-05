@@ -282,6 +282,84 @@ before the feature existed: 43/60, 31.4%.
 
 ---
 
+## B1-B4 — Four bugs reported from the live deployment  ✅ done
+
+All four were about **stationary objects**, and all four ended with the vehicle
+stopped in the road. A stationary object is the hard case for a tracker, not
+the easy one: its filtered velocity is noise with metres per second of standard
+deviation and its filtered position random-walks, so every quantity derived
+from either is suspect. Each bug was one such quantity being trusted.
+
+### The heading has to be earned, and can be lost
+
+It was fixed from the instantaneous filtered velocity, which for a parked car
+is whichever way the noise pointed, and nothing ever revised it. Measured on a
+parked car beside an otherwise empty road: **+100.7°** to a road it was
+parallel to. The risk kernels are anisotropic, so that laid the car's 4.65 m
+core half-length *across* the carriageway and turned a 4.2 m car into a **9.3 m
+wall** — which is exactly the "red field placed vertically instead of
+horizontally like the bus" in the report.
+
+A heading is now fixed from ground actually covered — a metre, within two
+seconds, and significant against the track's own position uncertainty — and a
+full window without covering it clears the heading again.
+
+### Motion is judged against the noise that could have produced it
+
+Two frames after a parked car is first detected, its velocity reads **2.15 m/s
+at 85°** to the road with a stated sigma of 0.79. A velocity from two noisy
+positions is not an observation of motion however small its covariance claims
+to be, so `is_moving` now wants three sigma *and* four hits. Deliberately
+independent of whether the track has a heading: a vehicle first seen closing at
+14 m/s is moving on its first frame and has not yet covered the ground that
+fixes its orientation.
+
+### The world can say that something has ceased to exist
+
+Coasting is right when a vehicle is hidden behind a bus — no sensor
+distinguishes occluded from gone. But here things really are removed, when a
+viewer erases one or the simulator clears one the vehicle has touched, and no
+sensor can observe that either. Measured: **100%** of the risk cells sitting
+more than 12 m from any road user were within 6 m of a track with no agent
+behind it, up to **13%** of the hot cells in a frame. Now **none**. That is the
+"red field with no vehicle in it".
+
+### The trajectory fan is centred on the vehicle, not on the reference
+
+Past a lateral span from the reference — exactly what getting around an
+obstruction requires — every sampled offset lay on the reference side, so
+"hold this offset" was not among the options and the whole fan steered back
+into the thing just avoided.
+
+### Two rendering and geometry errors alongside
+
+With Follow **off** the risk grid was rotated by `+heading` where the
+composition with the y-flip needs `−heading`. And time-to-collision laid each
+track's collision discs along that same unearned heading.
+
+### Measured
+
+| | before | after |
+|---|---|---|
+| one parked car, empty road | stopped level with it for the whole run | **goal at 190 m in 22.9 s** |
+| trajectories rejected as collisions there | 49 of 60, safety cap "clear" | — |
+| kernel angle error, stationary, `village_road_unmarked` | 18.5° mean, 16% over 30° | **6.9° mean, 6%** |
+| ...for bodies over 4 m long | 12.4° | **2.4°** |
+| risk cells orphaned from any road user | up to 13% of a frame | **0%** |
+| campaign, 60 runs | 43/60 collision-free, 31.4% | 42/60, **31.8%**, and the **first completed run** of any arm |
+
+### And it changed the answer on reverse
+
+Reverse shipped switched off because enabling it took collision-free runs from
+43/60 to 37/60, two of them with the ego moving. **That cost belonged to the
+risk field, not to the manoeuvre**: with a 9.3 m phantom wall across the road
+the vehicle was forever boxed in, forever shunting, and sitting across the
+carriageway while it did. With these fixes in, the same 60 runs give **42/60
+either way and zero collisions with the ego moving**, so reverse is now **on by
+default**.
+
+---
+
 ## Appendix: how the standstill was first spotted
 
 Measured over 60 s on `village_road_unmarked`, before P0.5:

@@ -69,14 +69,18 @@ class SarathiConfig:
     use_derived_reference: bool = True
     #: Whether the vehicle may back out of a dead end at all.
     #:
-    #: Off by default, and the measurement is the reason. Over 60 benchmark runs
-    #: it moved mean speed 0.95 -> 0.99 m/s and progress 31.4% -> 31.0%, while
-    #: collision-free runs went 43/60 -> 37/60 - about 1.7 standard errors, in
-    #: the worse direction. Reversing is the right move in the situation it was
-    #: built for, and it demonstrably escapes one, but it is not established as
-    #: safe-neutral across the campaign, so it is a switch a person turns on
-    #: rather than a default nobody chose.
-    use_reverse: bool = False
+    #: On, and the measurement is the reason. It was off, because with reverse
+    #: enabled collision-free runs fell 43/60 to 37/60 and two of those
+    #: collisions had the ego moving. That cost turned out to belong to the
+    #: risk field, not to the manoeuvre: a parked car whose heading had been
+    #: latched from noise laid a 9.3 m wall across the road, so the vehicle was
+    #: forever boxed in, forever shunting, and forever sitting across the
+    #: carriageway while it did. With that fixed the same 60 runs give 42/60
+    #: collision-free either way and zero collisions with the ego moving, for
+    #: 31.8% progress against 31.4%. Reverse now costs nothing measurable and
+    #: does the one thing nothing else can - change the angle the vehicle
+    #: presents to a blockage, which at zero speed a bicycle model cannot.
+    use_reverse: bool = True
 
 
 class SarathiController(EgoController):
