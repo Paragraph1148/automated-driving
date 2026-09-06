@@ -33,6 +33,11 @@ export interface Readout {
   safetyCap: number | null;
   paused: boolean;
   held: number[];
+  /** The most recent thing that happened to the vehicle — a contact, or
+   *  leaving the carriageway. The single most useful line on screen when
+   *  something has just gone wrong, and its absence made the demo look as
+   *  though nothing ever fails. */
+  lastEvent: { t: number; kind: string; detail: string } | null;
 }
 
 const EMPTY: Readout = {
@@ -51,6 +56,7 @@ const EMPTY: Readout = {
   safetyCap: null,
   paused: false,
   held: [],
+  lastEvent: null,
 };
 
 const n = (v: unknown): number | null =>
@@ -107,6 +113,7 @@ export function useLive() {
         safetyCap: n(d.safety_cap),
         paused: !!f.paused,
         held: f.held ?? [],
+        lastEvent: f.events?.length ? f.events[f.events.length - 1] : null,
       });
     }, 200);
     return () => window.clearInterval(id);

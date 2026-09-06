@@ -15,6 +15,14 @@ const PLACEABLE = [
   { cls: "barricade", label: "Barricade" },
 ];
 
+/** On a phone the rail is a wall of controls; show one group at a time. */
+const TABS = [
+  { key: "status", label: "Status" },
+  { key: "drop", label: "Drop" },
+  { key: "layers", label: "Layers" },
+] as const;
+type Tab = (typeof TABS)[number]["key"];
+
 const initialLayers = () =>
   Object.fromEntries(LAYER_SPEC.map((l) => [l.key, l.on])) as Layers;
 
@@ -23,17 +31,20 @@ export default function App() {
   const [layers, setLayers] = useState<Layers>(initialLayers);
   const [follow, setFollow] = useState(true);
   const [brush, setBrush] = useState("car");
+  const [erase, setErase] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [tab, setTab] = useState<Tab>("status");
+  const [view, setView] = useState({ zoom: 1, moved: false });
 
   const scene = useMemo(() => meta?.scene ?? {}, [meta]);
 
-  // Space toggles the world, which is the control you reach for most while
-  // watching something go wrong.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== "Space" || (e.target as HTMLElement).tagName === "INPUT") return;
-      e.preventDefault();
-      send({ cmd: "pause", value: !readout.paused });
+      if ((e.target as HTMLElement).tagName === "INPUT") return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        send({ cmd: "pause", value: !readout.paused });
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -62,21 +73,6 @@ export default function App() {
           </select>
         </label>
 
-        <label className="field">
-          <span className="field__label">Drop</span>
-          <select
-            className="key select"
-            value={brush}
-            onChange={(e) => setBrush(e.target.value)}
-          >
-            {PLACEABLE.map((p) => (
-              <option key={p.cls} value={p.cls}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
         <div className="bar__spacer" />
 
         <button
@@ -88,6 +84,7 @@ export default function App() {
         <button
           className={`key btn ${follow ? "is-on" : ""}`}
           onClick={() => setFollow((f) => !f)}
+          aria-pressed={follow}
         >
           Follow
         </button>
@@ -107,13 +104,50 @@ export default function App() {
           scene={scene}
           layers={layers}
           follow={follow}
-          onPick={([x, y]) => send({ cmd: "place", cls: brush, x, y })}
-          onDrag={(id, [x, y]) => send({ cmd: "drag", id, x, y })}
-          onRemove={([x, y]) => send({ cmd: "remove", x, y })}
+          erase={erase}
+          brush={brush}
+          onCommand={send}
+          onViewChange={(zoom, moved) => setView({ zoom, moved })}
         />
 
-        <aside className="rail">
-          <section className="rail__block">
+        <aside className="rail" data-tab={tab}>
+          <section className="rail__block" data-for="status">
+            <Readout r={readout} />
+          </section>
+
+          <section className="rail__block" data-for="drop">
+            <h2 className="rail__title">Drop</h2>
+            <ul className="palette">
+              {PLACEABLE.map((p) => (
+                <li key={p.cls}>
+                  <button
+                    className={`key palette__key ${brush === p.cls && !erase ? "is-on" : ""}`}
+                    onClick={() => {
+                      setBrush(p.cls);
+                      setErase(false);
+                    }}
+                    aria-pressed={brush === p.cls && !erase}
+                  >
+                    {p.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {/* No phone has a shift key, so removal needs its own control —
+                and a long press on a body does it too. */}
+            <button
+              className={`key btn erase ${erase ? "is-accent" : ""}`}
+              onClick={() => setErase((v) => !v)}
+              aria-pressed={erase}
+            >
+              {erase ? "Erasing — tap a road user" : "Erase"}
+            </button>
+            <p className="rail__hint">
+              Tap road to drop · drag to move · hold to remove · pinch to zoom
+            </p>
+          </section>
+
+          <section className="rail__block" data-for="layers">
             <h2 className="rail__title">Layers</h2>
             <ul className="layers">
               {LAYER_SPEC.map((l) => (
@@ -123,10 +157,7 @@ export default function App() {
                       type="checkbox"
                       checked={layers[l.key]}
                       onChange={(e) =>
-                        setLayers((p) => ({
-                          ...p,
-                          [l.key as LayerKey]: e.target.checked,
-                        }))
+                        setLayers((p) => ({ ...p, [l.key as LayerKey]: e.target.checked }))
                       }
                     />
                     <i className="layer__swatch" style={{ background: `var(${l.swatch})` }} />
@@ -136,8 +167,6 @@ export default function App() {
               ))}
             </ul>
           </section>
-
-          <Readout r={readout} />
         </aside>
       </main>
 
@@ -159,10 +188,32 @@ export default function App() {
         <span className="chip">
           <b>replan</b> {readout.replan === null ? "—" : readout.replan.toFixed(1)} ms
         </span>
-        <span className="chips__hint">
-          Click to drop · drag to move · shift-click to remove · space to pause
-        </span>
+        {readout.lastEvent && (
+          <span className="chip chip--event">
+            <b>last event</b> {readout.lastEvent.kind.replace(/_/g, " ")} ·{" "}
+            {readout.lastEvent.detail} @ {readout.lastEvent.t}s
+          </span>
+        )}
+        {view.moved && (
+          <span className="chip chip--view">
+            <b>zoom</b> {view.zoom.toFixed(1)}×
+          </span>
+        )}
       </footer>
+
+      <nav className="tabs" aria-label="Panels">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            className={tab === t.key ? "is-on" : ""}
+            aria-pressed={tab === t.key}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+        <button onClick={() => setPanelOpen(true)}>Tune</button>
+      </nav>
 
       {panelOpen && meta && (
         <Panel

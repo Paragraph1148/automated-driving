@@ -12,7 +12,7 @@ const num = (v: unknown, d = 1) =>
 export default function Readout({ r }: { r: R }) {
   const tone = STATE_TONE[r.behaviour] ?? "--ink-3";
   return (
-    <section className="rail__block">
+    <>
       <h2 className="rail__title">State</h2>
 
       <div className="cap state" style={{ ["--st" as string]: `var(${tone})` }}>
@@ -26,6 +26,6 @@ export default function Readout({ r }: { r: R }) {
         <div><dt>Clearance</dt><dd>{num(r.clearance, 2)}<u>m</u></dd></div>
         <div><dt>Plan risk</dt><dd>{num(r.risk, 2)}</dd></div>
       </dl>
-    </section>
+    </>
   );
 }

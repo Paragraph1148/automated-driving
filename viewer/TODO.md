@@ -1,47 +1,45 @@
-# Mission Control — regressions against the old viewer
+# Mission Control — remaining work
 
-Found by Rishabh testing the React rebuild. Not yet fixed; portfolio work
-came first. Each of these worked in the pre-rewrite `mission_control.html`,
-so they are regressions rather than new features.
+Four regressions Rishabh found in the React rebuild are now fixed; what is
+left is listed at the bottom.
 
-## 1. Dragging road users is broken
+## Fixed
 
-`Viewport.tsx` hit-tests and sets `dragging.current`, then sends
-`{cmd:"drag", id, x, y}` on pointer move. But the protocol in `serve.py`
-wants a **`grab` first** — `session.grab(id, x, y)` is what marks the body
-held, and the server replies `{grabbed: …}`. Without it `drag` is being
-sent for a body the session does not consider held, and `drop` is never
-sent on release either. Wire the full grab → drag → drop sequence, and
-feed `held` back so the accent ring draws.
+**Dragging.** The rebuild sent only `drag`. The server wants
+`grab` → `drag` → `drop`: `session.grab(id, x, y)` is what marks a body held,
+and `drag` on an unheld body does nothing. The whole pointer model is now
+ported from the pre-rewrite viewer rather than reinvented — one Map keyed by
+pointerId, because a touch screen sends several at once and a mouse never
+does. That brought back with it: pinch to zoom and pan, drag on empty road to
+pan, tap-slop so a shaky tap still counts as a tap, and long-press-to-remove,
+which is the only way to delete a road user on a phone since no phone has a
+shift key.
 
-## 2. Zoom buttons gone
+**Zoom buttons.** Restored, with the anchored zoom the old viewer had: zoom
+about the cursor or the pinch midpoint rather than the viewport centre, so
+whatever you were looking at stays put. Plus a reset, and a chip that appears
+once the view is no longer the one the page chose — without it someone who
+zooms in and loses the vehicle has no way of knowing why the screen is empty.
 
-Not intentional — an oversight. The old viewer had explicit `+` / `−`
-buttons; the rebuild only kept `wheel`. That is unusable on a touch device,
-which is most of the point of the demo. Restore the buttons (and pinch),
-clamped to the existing `ZOOM_MIN` / `ZOOM_MAX`.
+**Last-impact readout.** `payload["events"]` was arriving over the socket the
+whole time with nothing rendering it. Back as a chip: kind, detail and
+timestamp of the most recent contact or off-road excursion.
 
-## 3. Last-impact readout gone
+**Mobile layout.** Rebuilt against the old design rather than patched. The
+viewport takes the top 46svh and the rail below shows one group at a time —
+Status, Drop, Layers — with a tab row as a real grid row rather than a fixed
+overlay, so nothing has to reserve space for it. 44px zoom buttons, 48px tabs.
 
-The old viewer reported the last contact — time, and whether the vehicle
-left the carriageway. `payload["events"]` is still arriving over the socket
-and `Frame.events` is typed, but nothing renders it. Restore it; it is the
-single most useful thing on screen when something goes wrong, and its
-absence makes the demo look like nothing ever fails.
+## Still not ported
 
-## 4. Mobile layout is a regression
-
-The old viewer was usable on a phone; the rebuild is not. `.stage` collapses
-to a 1fr/auto grid with the rail taking `38vh`, which leaves the viewport a
-letterbox, and the top bar wraps into several rows. Rebuild the small-screen
-layout properly against the old one rather than patching this — the old
-markup is in git history at `sarathi/assets/mission_control.html` before the
-rewrite commit.
-
-## 5. Also not yet ported (known, from the rewrite)
-
-- The guide overlay.
+- The guide overlay / first-run tour. Worth having: shown the demo cold, a
+  viewer reported back "it's one scene with pre-set traffic", having found
+  none of the interaction. That tour was the fix.
+- The "Road blocked" banner. `debug.blocked_at` is already drawn as a ring on
+  the canvas, but the banner that names it and asks the viewer to move the
+  obstruction is gone. It is also the most convincing proof the world is live
+  — a recording cannot ask you for help.
 - Replay-mode scrubbing. `sarathi replay` shares this template and injects
   frames into `__RUN_DATA__`; that path is untested since the rewrite and
   should be verified before shipping.
-- Pan by dragging empty road.
+- Viewer count in the status pill ("live · 3 watching").

@@ -83,7 +83,9 @@ export interface Frame {
   tracks?: Track[];
   reference?: XY[];
   risk?: RiskGrid;
-  events?: string[];
+  /** {t, kind, detail} — simulator.py appends these; the last one is the
+   *  most useful thing on screen when something has just gone wrong. */
+  events?: { t: number; kind: string; detail: string }[];
   held?: number[];
   paused?: boolean;
 }

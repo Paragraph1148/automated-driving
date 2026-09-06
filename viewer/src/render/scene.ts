@@ -84,6 +84,37 @@ export class Renderer {
   }
 
   /**
+   * Zoom about a screen point: find the world point under it, apply the new
+   * zoom, re-project, and pan by however far it moved. Without this the view
+   * zooms about its own centre and whatever you were looking at slides away.
+   * Used by the wheel, the pinch midpoint and the zoom buttons alike.
+   */
+  anchorZoom(f: Frame | null, px: number, py: number, nextZoom: number): void {
+    const before = f ? this.toWorld(f, px, py) : null;
+    this.view.zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, nextZoom));
+    this.applyZoom();
+    if (before && f) {
+      const after = this.transform(f)(before[0], before[1]);
+      this.view.panX += px - after[0];
+      this.view.panY += py - after[1];
+    }
+  }
+
+  resetView(): void {
+    this.view.zoom = 1;
+    this.view.panX = 0;
+    this.view.panY = 0;
+    this.applyZoom();
+  }
+
+  /** Has the operator moved the view off the one the page chose? */
+  get moved(): boolean {
+    return (
+      Math.abs(this.view.zoom - 1) > 1e-3 || !!this.view.panX || !!this.view.panY
+    );
+  }
+
+  /**
    * One description of the view, so the forward transform and its inverse
    * cannot drift apart — they used to carry duplicate copies of the same six
    * lines, and adding zoom and pan to only one of them put every drop and

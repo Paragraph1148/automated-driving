@@ -415,3 +415,139 @@ body {
 .tune__flag.is-off {
   color: var(--crit);
 }
+
+/* ── zoom cluster ─────────────────────────────────────────────────
+   Restored. The rebuild kept only the wheel, which is no control at all
+   on a touch screen — and a touch screen is most of the point of a demo
+   you hand to someone. */
+.zoomers {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.zoomers__btn {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  font-size: 16px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+/* ── drop palette ─────────────────────────────────────────────── */
+.palette {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.palette__key {
+  padding: 8px 11px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.palette__key.is-on {
+  color: var(--accent);
+  box-shadow: 0 1px 0 var(--cap-rim) inset, 0 0 0 1px var(--accent) inset,
+    0 3px 0 var(--cap-wall), 0 5px 10px var(--cap-shadow);
+}
+.erase {
+  width: 100%;
+  text-align: center;
+}
+.rail__hint {
+  font-family: var(--sans);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--legend-faint);
+  margin: 10px 0 0;
+}
+
+.chip--event {
+  box-shadow: 0 1px 0 var(--cap-rim) inset, 0 0 0 1px var(--crit) inset,
+    0 2px 0 var(--cap-wall);
+}
+
+/* ── tabs: phones only ────────────────────────────────────────────
+   The rail is a wall of controls on a 390px screen and everything past
+   the first screenful is found only by accident. One group at a time,
+   with the switcher as a real grid row rather than a fixed overlay, so
+   nothing has to reserve space for it. */
+.tabs {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .app {
+    grid-template-rows: auto 1fr auto auto;
+  }
+  .stage {
+    grid-template-columns: 1fr;
+    grid-template-rows: 46svh 1fr;
+    min-height: 0;
+  }
+  .rail {
+    border-left: 0;
+    border-top: 1px solid var(--rule);
+    max-height: none;
+    min-height: 0;
+  }
+  .rail > .rail__block {
+    display: none;
+  }
+  .rail[data-tab="status"] > [data-for="status"],
+  .rail[data-tab="drop"] > [data-for="drop"],
+  .rail[data-tab="layers"] > [data-for="layers"] {
+    display: block;
+  }
+
+  .tabs {
+    display: grid;
+    grid-auto-flow: column;
+    gap: 6px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--rule);
+  }
+  .tabs button {
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--legend-dim);
+    font: inherit;
+    /* 48px: a thumb, not a mouse */
+    min-height: 48px;
+    cursor: pointer;
+  }
+  .tabs button.is-on {
+    color: var(--accent);
+    background: linear-gradient(178deg, var(--cap-sheen), transparent 46%), var(--cap);
+    box-shadow: 0 1px 0 var(--cap-rim) inset, 0 0 0 1px var(--cap-hi) inset,
+      0 2px 0 var(--cap-wall);
+  }
+
+  .zoomers__btn {
+    width: 44px;
+    height: 44px;
+    font-size: 18px;
+  }
+  .chips {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+  .chips__hint {
+    display: none;
+  }
+  .bar {
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .bar__kana {
+    display: none;
+  }
+}
