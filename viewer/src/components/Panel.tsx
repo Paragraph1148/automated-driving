@@ -51,7 +51,7 @@ export default function Panel({
 
       <div className="sheet__body">
         {sections.map(([section, items]) => (
-          <section key={section} className="group">
+          <section key={section} className="group" data-section={section}>
             <h3 className="group__name">{section}</h3>
 
             {items.map((t) => {

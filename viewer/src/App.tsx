@@ -5,6 +5,7 @@ import Viewport from "./components/Viewport";
 import Panel from "./components/Panel";
 import Readout from "./components/Readout";
 import Blocked from "./components/Blocked";
+import Tour from "./components/Tour";
 
 /**
  * The drop palette, exactly as the old viewer had it: class, label, POLICY and
@@ -47,6 +48,7 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("status");
   const [view, setView] = useState({ zoom: 1, moved: false });
+  const [tourOpen, setTourOpen] = useState(false);
 
   const scene = useMemo(() => meta?.scene ?? {}, [meta]);
 
@@ -68,9 +70,16 @@ export default function App() {
         <div className="bar__id">
           <span className="bar__mark">SARATHI</span>
           <span className="bar__kana">サラティ</span>
+          <button
+            className="key btn btn--tiny"
+            onClick={() => setTourOpen(true)}
+            title="What can this page do?"
+          >
+            Guide
+          </button>
         </div>
 
-        <label className="field">
+        <label className="field" data-tour="scenario">
           <span className="field__label">Scenario</span>
           <select
             className="key select"
@@ -100,7 +109,11 @@ export default function App() {
         >
           Follow
         </button>
-        <button className="key btn" onClick={() => setPanelOpen((o) => !o)}>
+        <button
+          className="key btn"
+          data-tour="thresholds"
+          onClick={() => setPanelOpen((o) => !o)}
+        >
           Thresholds
         </button>
 
@@ -250,6 +263,14 @@ export default function App() {
         ))}
         <button onClick={() => setPanelOpen(true)}>Tune</button>
       </nav>
+
+      <Tour
+        open={tourOpen}
+        onOpen={() => setTourOpen(true)}
+        onClose={() => setTourOpen(false)}
+        onTab={setTab}
+        onPanel={setPanelOpen}
+      />
 
       {panelOpen && meta && (
         <Panel

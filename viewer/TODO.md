@@ -47,11 +47,15 @@ entirely, and the warn/alert banding on TTC (<4s, <2s) and path clearance
 last of which is the most convincing proof the world is live, since a
 recording cannot ask you for help.
 
+**The guided tour.** Seven cards, shown once on a first visit, remembered in
+localStorage and re-openable from the Guide button in the header. One change
+from the original: it used to drop any step whose target was hidden, which on
+a phone meant the palette and ablations steps silently vanished — the viewer
+who most needs the tour got the least of it. This version opens the tab or the
+sheet the step points at first.
+
 ## Still not ported
 
-- The guide overlay / first-run tour. Worth having: shown the demo cold, a
-  viewer reported back "it's one scene with pre-set traffic", having found
-  none of the interaction. That tour was the fix.
 - Replay-mode scrubbing and the rate control. `sarathi replay` shares this
   template and injects frames into `__RUN_DATA__`; that path is untested
   since the rewrite and should be verified before shipping.

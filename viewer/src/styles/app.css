@@ -679,3 +679,102 @@ body {
     display: none;
   }
 }
+
+/* ── the guided tour ──────────────────────────────────────────── */
+.btn--tiny {
+  padding: 4px 9px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+/* The ring's enormous shadow is what dims the rest of the page — one element
+   doing both jobs, so there is no separate scrim to keep in sync. */
+.tour__ring {
+  position: absolute;
+  border-radius: 8px;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 9999px rgba(8, 8, 9, 0.66);
+  pointer-events: none;
+  transition: top 0.22s ease, left 0.22s ease, width 0.22s ease, height 0.22s ease;
+}
+.tour__card {
+  position: absolute;
+  width: min(348px, calc(100vw - 24px));
+  padding: 15px 17px 13px;
+  border-radius: 12px;
+  background: linear-gradient(178deg, var(--cap-sheen), transparent 44%), var(--cap);
+  box-shadow: 0 1px 0 var(--cap-rim) inset, 0 0 0 1px var(--cap-hi) inset,
+    0 12px 34px var(--cap-shadow);
+}
+.tour__count {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.tour__card h3 {
+  margin: 3px 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.tour__card p {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--legend-dim);
+}
+.tour__card p b {
+  color: var(--legend);
+  font-weight: 600;
+}
+.tour__nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.tour__spacer {
+  flex: 1;
+}
+.tour__dots {
+  display: flex;
+  gap: 5px;
+  margin-right: 4px;
+}
+.tour__dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rule-strong);
+}
+.tour__dots i.on {
+  background: var(--accent);
+}
+
+@media (max-width: 860px) {
+  /* A card that chases a target around a 390px screen is unreadable. Pin it. */
+  .tour__card {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: 10px;
+    top: auto !important;
+    width: auto;
+  }
+  .tour__dots {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour__ring {
+    transition: none;
+  }
+}
