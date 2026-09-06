@@ -33,6 +33,11 @@ export interface Readout {
   safetyCap: number | null;
   paused: boolean;
   held: number[];
+  minTtc: number | null;
+  viewers: number;
+  /** Set while the supervisor has found nowhere past something. */
+  blocked: { forSecs: number; cls: string } | null;
+  reversing: { left: number; room: number } | null;
   /** The most recent thing that happened to the vehicle — a contact, or
    *  leaving the carriageway. The single most useful line on screen when
    *  something has just gone wrong, and its absence made the demo look as
@@ -56,6 +61,10 @@ const EMPTY: Readout = {
   safetyCap: null,
   paused: false,
   held: [],
+  minTtc: null,
+  viewers: 1,
+  blocked: null,
+  reversing: null,
   lastEvent: null,
 };
 
@@ -113,6 +122,16 @@ export function useLive() {
         safetyCap: n(d.safety_cap),
         paused: !!f.paused,
         held: f.held ?? [],
+        minTtc: n(d.min_ttc),
+        viewers: (f.viewers as number) ?? 1,
+        blocked:
+          d.blocked_for != null
+            ? { forSecs: d.blocked_for, cls: (d.blocked_cls as string) || "vehicle" }
+            : null,
+        reversing:
+          d.behaviour === "reverse"
+            ? { left: d.reverse_left ?? 0, room: d.reverse_room ?? 0 }
+            : null,
         lastEvent: f.events?.length ? f.events[f.events.length - 1] : null,
       });
     }, 200);

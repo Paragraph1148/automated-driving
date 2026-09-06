@@ -30,16 +30,30 @@ viewport takes the top 46svh and the rail below shows one group at a time —
 Status, Drop, Layers — with a tab row as a real grid row rather than a fixed
 overlay, so nothing has to reserve space for it. 44px zoom buttons, 48px tabs.
 
+**The drop palette.** I had invented a list instead of reading the old one.
+The real palette is eight entries carrying `[cls, label, policy, speed]`, and
+the policy is the half that matters: "Wrong-way" and "Rash driver" are not
+classes, they are a two-wheeler and a car given a different policy. My `place`
+command sent neither policy nor speed, so those two were impossible to create
+and the palette collapsed into duplicates of the plain classes.
+
+**Min TTC, and severity on the tiles.** The telemetry block was missing Min TTC
+entirely, and the warn/alert banding on TTC (<4s, <2s) and path clearance
+(<0.7m, <0.3m) that makes the number that matters findable at a glance.
+
+**Reset vehicle.** `cmd: restart_ego` had no control at all.
+
+**Road-user legend, clock, viewer count, and the "Road blocked" banner** — the
+last of which is the most convincing proof the world is live, since a
+recording cannot ask you for help.
+
 ## Still not ported
 
 - The guide overlay / first-run tour. Worth having: shown the demo cold, a
   viewer reported back "it's one scene with pre-set traffic", having found
   none of the interaction. That tour was the fix.
-- The "Road blocked" banner. `debug.blocked_at` is already drawn as a ring on
-  the canvas, but the banner that names it and asks the viewer to move the
-  obstruction is gone. It is also the most convincing proof the world is live
-  — a recording cannot ask you for help.
-- Replay-mode scrubbing. `sarathi replay` shares this template and injects
-  frames into `__RUN_DATA__`; that path is untested since the rewrite and
-  should be verified before shipping.
-- Viewer count in the status pill ("live · 3 watching").
+- Replay-mode scrubbing and the rate control. `sarathi replay` shares this
+  template and injects frames into `__RUN_DATA__`; that path is untested
+  since the rewrite and should be verified before shipping.
+- The scenario/chaos/outcome trio in the header — scenario is a select now,
+  but chaos and outcome are not shown.

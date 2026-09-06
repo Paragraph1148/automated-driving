@@ -4,16 +4,28 @@ import { LAYER_SPEC, type LayerKey, type Layers } from "./lib/types";
 import Viewport from "./components/Viewport";
 import Panel from "./components/Panel";
 import Readout from "./components/Readout";
+import Blocked from "./components/Blocked";
 
-const PLACEABLE = [
-  { cls: "car", label: "Car" },
-  { cls: "bus", label: "Bus" },
-  { cls: "auto_rickshaw", label: "Auto" },
-  { cls: "two_wheeler", label: "Two-wheeler" },
-  { cls: "pedestrian", label: "Pedestrian" },
-  { cls: "cattle", label: "Cattle" },
-  { cls: "barricade", label: "Barricade" },
+/**
+ * The drop palette, exactly as the old viewer had it: class, label, POLICY and
+ * speed. The policy is the half I dropped in the rebuild, and it is the half
+ * that matters — "Wrong-way" and "Rash driver" are not classes, they are a
+ * two-wheeler and a car given a different policy, so without it neither could
+ * be placed at all and half the palette collapsed into duplicates.
+ */
+const PLACEABLE: { cls: string; label: string; policy: string; speed: number }[] = [
+  { cls: "two_wheeler", label: "Two-wheeler", policy: "traffic", speed: 8.0 },
+  { cls: "cattle", label: "Cow", policy: "cattle", speed: 0.0 },
+  { cls: "auto_rickshaw", label: "Auto", policy: "traffic", speed: 6.0 },
+  { cls: "pedestrian", label: "Pedestrian", policy: "traffic", speed: 1.1 },
+  { cls: "two_wheeler", label: "Wrong-way", policy: "wrong_way", speed: 9.0 },
+  { cls: "car", label: "Rash driver", policy: "rash", speed: 9.0 },
+  { cls: "barricade", label: "Barricade", policy: "static", speed: 0.0 },
+  { cls: "parked_vehicle", label: "Parked car", policy: "static", speed: 0.0 },
 ];
+
+const TOUCH =
+  window.matchMedia("(hover: none)").matches || (navigator.maxTouchPoints || 0) > 0;
 
 /** On a phone the rail is a wall of controls; show one group at a time. */
 const TABS = [
@@ -30,7 +42,7 @@ export default function App() {
   const { frameRef, meta, status, readout, send } = useLive();
   const [layers, setLayers] = useState<Layers>(initialLayers);
   const [follow, setFollow] = useState(true);
-  const [brush, setBrush] = useState("car");
+  const [brushIdx, setBrushIdx] = useState(0);
   const [erase, setErase] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("status");
@@ -92,9 +104,12 @@ export default function App() {
           Thresholds
         </button>
 
+        <span className="clock">{readout.t.toFixed(1)} s</span>
         <span className={`status status--${status}`}>
           <i />
-          {status}
+          {status === "live" && readout.viewers > 1
+            ? `live · ${readout.viewers} watching`
+            : status}
         </span>
       </header>
 
@@ -105,9 +120,10 @@ export default function App() {
           layers={layers}
           follow={follow}
           erase={erase}
-          brush={brush}
+          brush={PLACEABLE[brushIdx]}
           onCommand={send}
           onViewChange={(zoom, moved) => setView({ zoom, moved })}
+          overlay={<Blocked r={readout} touch={TOUCH} />}
         />
 
         <aside className="rail" data-tab={tab}>
@@ -118,16 +134,17 @@ export default function App() {
           <section className="rail__block" data-for="drop">
             <h2 className="rail__title">Drop</h2>
             <ul className="palette">
-              {PLACEABLE.map((p) => (
-                <li key={p.cls}>
+              {PLACEABLE.map((p, i) => (
+                <li key={p.label}>
                   <button
-                    className={`key palette__key ${brush === p.cls && !erase ? "is-on" : ""}`}
+                    className={`key palette__key ${brushIdx === i && !erase ? "is-on" : ""}`}
                     onClick={() => {
-                      setBrush(p.cls);
+                      setBrushIdx(i);
                       setErase(false);
                     }}
-                    aria-pressed={brush === p.cls && !erase}
+                    aria-pressed={brushIdx === i && !erase}
                   >
+                    <i className="palette__dot" data-cls={p.cls} />
                     {p.label}
                   </button>
                 </li>
@@ -135,13 +152,24 @@ export default function App() {
             </ul>
             {/* No phone has a shift key, so removal needs its own control —
                 and a long press on a body does it too. */}
-            <button
-              className={`key btn erase ${erase ? "is-accent" : ""}`}
-              onClick={() => setErase((v) => !v)}
-              aria-pressed={erase}
-            >
-              {erase ? "Erasing — tap a road user" : "Erase"}
-            </button>
+            <div className="rowbtns">
+              <button
+                className={`key btn ${erase ? "is-accent" : ""}`}
+                onClick={() => setErase((v) => !v)}
+                aria-pressed={erase}
+              >
+                {erase ? "Erasing" : "Erase"}
+              </button>
+              <button className="key btn" onClick={() => send({ cmd: "restart_ego" })}>
+                Reset vehicle
+              </button>
+              <button
+                className={`key btn ${readout.paused ? "is-accent" : ""}`}
+                onClick={() => send({ cmd: "pause", value: !readout.paused })}
+              >
+                {readout.paused ? "Resume" : "Pause"}
+              </button>
+            </div>
             <p className="rail__hint">
               Tap road to drop · drag to move · hold to remove · pinch to zoom
             </p>
@@ -165,6 +193,14 @@ export default function App() {
                   </label>
                 </li>
               ))}
+            </ul>
+            <h2 className="rail__title rail__title--spaced">Road users</h2>
+            <ul className="legend">
+              <li><i style={{ background: "var(--ego)", outline: "1.5px solid var(--ego-ring)" }} />Ego vehicle</li>
+              <li><i style={{ background: "var(--veh)" }} />Vehicles — car, bus, truck, auto</li>
+              <li><i style={{ background: "var(--vru)" }} />Vulnerable — two-wheeler, cycle, pedestrian, cart</li>
+              <li><i style={{ background: "var(--animal)" }} />Animals — cattle, stray dogs</li>
+              <li><i style={{ background: "var(--furniture)" }} />Static — barricades, parked</li>
             </ul>
           </section>
         </aside>

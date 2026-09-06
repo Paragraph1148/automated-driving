@@ -67,7 +67,12 @@ export interface Debug {
   margin_relief?: number;
   safety_cap?: number;
   replan_ms?: number;
+  min_ttc?: number;
   blocked_at?: XY;
+  blocked_for?: number;
+  blocked_cls?: string;
+  reverse_left?: number;
+  reverse_room?: number;
   [k: string]: unknown;
 }
 
@@ -88,6 +93,8 @@ export interface Frame {
   events?: { t: number; kind: string; detail: string }[];
   held?: number[];
   paused?: boolean;
+  /** How many browsers are watching this one shared world. */
+  viewers?: number;
 }
 
 export interface Scene {

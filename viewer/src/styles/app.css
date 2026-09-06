@@ -551,3 +551,131 @@ body {
     display: none;
   }
 }
+
+/* ── telemetry tiles: severity is a state, not just a number ────── */
+.rail__title--spaced {
+  margin-top: 18px;
+}
+.metrics .tile {
+  border-radius: 7px;
+  padding: 5px 7px;
+  margin: -5px -7px;
+}
+.metrics .tile.is-warn {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.metrics .tile.is-alert {
+  background: color-mix(in srgb, var(--crit) 18%, transparent);
+}
+.metrics .tile.is-alert dd {
+  color: var(--crit);
+}
+
+/* ── palette ──────────────────────────────────────────────────── */
+.palette__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 7px;
+  display: inline-block;
+  vertical-align: baseline;
+  background: var(--furniture);
+}
+.palette__dot[data-cls="two_wheeler"],
+.palette__dot[data-cls="pedestrian"] {
+  background: var(--vru);
+}
+.palette__dot[data-cls="car"],
+.palette__dot[data-cls="auto_rickshaw"],
+.palette__dot[data-cls="parked_vehicle"] {
+  background: var(--veh);
+}
+.palette__dot[data-cls="cattle"] {
+  background: var(--animal);
+}
+.rowbtns {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+/* ── road-user legend ─────────────────────────────────────────── */
+.legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  color: var(--legend-dim);
+}
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.legend i {
+  width: 14px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--legend-dim);
+  white-space: nowrap;
+}
+
+/* ── "nothing can get past this" ───────────────────────────────── */
+.blocked {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 110px);
+  padding: 9px 13px;
+  border-radius: 9px;
+  background: linear-gradient(178deg, var(--cap-sheen), transparent 44%), var(--cap);
+  box-shadow: 0 1px 0 var(--cap-rim) inset, 0 0 0 1px var(--crit) inset,
+    0 6px 20px var(--cap-shadow);
+}
+.blocked__tag {
+  font-weight: 600;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--crit);
+  white-space: nowrap;
+}
+.blocked__hint {
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--legend-dim);
+}
+.blocked__hint b {
+  color: var(--legend);
+}
+
+@media (max-width: 860px) {
+  /* Full width, or it shrink-wraps to half the screen and stacks the
+     sentence into eight lines. */
+  .blocked {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    max-width: none;
+    transform: none;
+    padding: 8px 11px;
+  }
+  .clock {
+    display: none;
+  }
+}

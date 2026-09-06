@@ -28,6 +28,7 @@ export default function Viewport({
   follow,
   erase,
   brush,
+  overlay,
   onCommand,
   onViewChange,
 }: {
@@ -36,7 +37,8 @@ export default function Viewport({
   layers: Layers;
   follow: boolean;
   erase: boolean;
-  brush: string;
+  brush: { cls: string; policy: string; speed: number };
+  overlay?: React.ReactNode;
   onCommand: (msg: Record<string, unknown>) => void;
   onViewChange: (zoom: number, moved: boolean) => void;
 }) {
@@ -266,7 +268,17 @@ export default function Viewport({
       if (e.shiftKey || eraseRef.current) {
         onCommand({ cmd: "remove", x: pt[0], y: pt[1] });
       } else {
-        onCommand({ cmd: "place", cls: brushRef.current, x: pt[0], y: pt[1] });
+        const b = brushRef.current;
+        // policy and speed travel with the class: a wrong-way rider is a
+        // two-wheeler with a different policy, not a different class.
+        onCommand({
+          cmd: "place",
+          cls: b.cls,
+          x: pt[0],
+          y: pt[1],
+          policy: b.policy,
+          speed: b.speed,
+        });
       }
     };
 
@@ -332,6 +344,7 @@ export default function Viewport({
   return (
     <div className="viewport">
       <canvas ref={canvasRef} />
+      {overlay}
       <div className="zoomers">
         <button className="key zoomers__btn" onClick={() => zoomBy(1.35)} aria-label="Zoom in">
           +
