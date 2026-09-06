@@ -44,6 +44,14 @@ def build(run_path: Path, out_path: Path, chaos: float | None = None,
     # Split the closing tag so the JSON can never terminate the script element.
     payload = json.dumps(run, separators=(",", ":")).replace("</", "<\\/")
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # A replay page is a file, opened from disk or from wherever someone puts
+    # it, so there is no request to derive an origin from. Drop the link-preview
+    # tags rather than emit an unsubstituted placeholder: a card pointing at
+    # "__OG_BASE__/og.png" is worse than no card.
+    html = "\n".join(
+        line for line in html.splitlines()
+        if 'property="og:' not in line and 'name="twitter:' not in line
+        and "__OG_BASE__" not in line)
     out_path.write_text(html.replace(PLACEHOLDER, payload))
     return out_path
 
