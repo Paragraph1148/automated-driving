@@ -28,3 +28,8 @@ data/
 *.slx.autosave
 slprj/
 artifacts/mission-control.html
+
+# viewer build inputs; the built single file is committed under sarathi/assets
+viewer/node_modules/
+viewer/dist/
+viewer/tsconfig.tsbuildinfo

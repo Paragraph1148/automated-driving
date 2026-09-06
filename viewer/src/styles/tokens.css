@@ -1,0 +1,107 @@
+/* ─────────────────────────────────────────────────────────────
+   RED SAMURAI — the same deck the portfolio runs on.
+
+   The renderer reads its colours through the var names the old
+   viewer already used (--road, --ink-2, --veh …), so the drawing
+   code ports across unchanged and only the values move. Semantic
+   mapping matches the portfolio hero: the chosen trajectory is
+   amber, and red belongs to the risk field — one red per screen.
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --case: #dedbd3;
+  --cap: #f7f4ec;
+  --cap-wall: #d8d3c6;
+  --cap-hi: rgba(255, 255, 255, 0.9);
+  --cap-rim: rgba(255, 255, 255, 0.95);
+  --cap-sheen: rgba(255, 255, 255, 0.75);
+  --cap-shadow: rgba(38, 34, 26, 0.16);
+  --cap-glass: rgba(252, 250, 244, 0.58);
+
+  --legend: #17171a;
+  --legend-dim: #6e6a61;
+  --legend-faint: #969186;
+  --rule: rgba(23, 23, 26, 0.13);
+  --rule-strong: rgba(23, 23, 26, 0.26);
+  --accent-glow: rgba(192, 39, 31, 0.34);
+
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --kana: "Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif;
+
+  /* ── what the renderer reads ─────────────────────────────── */
+  --surface-1: #d6d2c8;
+  --road: #c6c2b7;
+  --road-edge: rgba(23, 23, 26, 0.3);
+
+  --ink-1: #17171a;
+  --ink-2: #6e6a61;
+  --ink-3: #969186;
+
+  --accent: #9a5a00; /* the chosen trajectory, and a held body */
+  --risk-hue: #c0271f; /* the one red */
+  --risk-gamma: 2.1;
+  --risk-alpha: 185;
+  --ego: #17171a;
+  --ego-ring: #f7f4ec;
+
+  /* Road-user classes. Validated, not eyeballed: light passes every
+     check (worst CVD deutan 6.2, tritan 16.3, normal 21.6); dark carries
+     one warning at protan 6.8 / tritan 7.5, inside the 6-8 band the spec
+     allows WITH secondary encoding. This is a map, not a chart — a bus is
+     12 m and a pedestrian is 0.5 m, every body carries a heading tick and
+     a contrasting ring, and the legend is labelled, so class never rests
+     on hue alone. Four hues cannot clear protan AND tritan at once; this
+     is the best worst case. */
+  --veh: #2a63a6;
+  --vru: #63a83f;
+  --animal: #c2600f;
+  --furniture: #7a4a9e;
+
+  --ok: #167e5a;
+  --warn: #9a5a00;
+  --crit: #c0271f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --case: #0c0c0d;
+    --cap: #1a1a1d;
+    --cap-wall: #0a0a0b;
+    --cap-hi: rgba(255, 255, 255, 0.07);
+    --cap-rim: rgba(255, 255, 255, 0.16);
+    --cap-sheen: rgba(255, 255, 255, 0.1);
+    --cap-shadow: rgba(0, 0, 0, 0.6);
+    --cap-glass: rgba(40, 40, 47, 0.46);
+
+    --legend: #efebe2;
+    --legend-dim: #8b867c;
+    --legend-faint: #605c55;
+    --rule: rgba(239, 235, 226, 0.13);
+    --rule-strong: rgba(239, 235, 226, 0.28);
+    --accent-glow: rgba(224, 57, 44, 0.5);
+
+    --surface-1: #101012;
+    --road: #202025;
+    --road-edge: rgba(239, 235, 226, 0.26);
+
+    --ink-1: #efebe2;
+    --ink-2: #8b867c;
+    --ink-3: #605c55;
+
+    --accent: #e6a949;
+    --risk-hue: #e0392c;
+    --risk-gamma: 1.35;
+    --risk-alpha: 205;
+    --ego: #e9e5dc;
+    --ego-ring: #0c0c0d;
+
+    --veh: #4d95d6;
+    --vru: #3d9155;
+    --animal: #cc6528;
+    --furniture: #9a7fd0;
+
+    --ok: #2bb888;
+    --warn: #e6a949;
+    --crit: #e0392c;
+  }
+}
