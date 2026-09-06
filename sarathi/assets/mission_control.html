@@ -1,4 +1,6 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
 <!-- Without this the page is laid out at a 980px virtual viewport and scaled
      down: a 390px phone reports window.innerWidth === 980, so the mobile
@@ -9,7 +11,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SARATHI Mission Control</title>
 <meta name="description" content="A motion-planning stack for unstructured Indian roads, running live in your browser. Drop a cow in front of it and watch it replan.">
-<!-- Link previews. __OG_BASE__ is substituted per request from the Host header:
+<!-- Link previews. The origin below is substituted per request from the Host
+     header:
      scrapers need absolute URLs, but baking a hostname into the template would
      cost the property that it is byte-identical on a laptop and behind TLS on
      someone else's domain. -->
@@ -26,6 +29,7 @@
 <meta name="twitter:title" content="SARATHI — live motion planning for unstructured Indian roads">
 <meta name="twitter:description" content="Perception, prediction, a risk field and a trajectory search, running live at 20 Hz. Drop a cow anywhere on the road.">
 <meta name="twitter:image" content="__OG_BASE__/og.png">
+<link rel="image_src" href="__OG_BASE__/og.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -316,7 +320,9 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
 @media (prefers-reduced-motion:reduce){*{transition:none!important}
   .tour-ring{transition:none} .live-dot{animation:none}}
 </style>
+</head>
 
+<body>
 <div class="app">
   <header>
     <div>
@@ -1478,3 +1484,5 @@ if (LIVE){
 }
 })();
 </script>
+</body>
+</html>
