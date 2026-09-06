@@ -121,6 +121,7 @@ given below.
 | …of which we drove into | 714 | 549 |
 | Routes completed | 1 / 200 | 0 / 200 |
 | Replan latency, median p95 | 21.4 ms | — |
+| Runs replanning inside a 20 Hz tick | 199 / 200 | 200 / 200 |
 
 Per scenario, mean route progress and runs that ended without contact:
 
@@ -162,12 +163,17 @@ baseline's 60.
 **On latency.** Replan time is the only metric here that is not deterministic —
 it is wall-clock, so a busy machine corrupts it. Measured on an **Intel Core
 i7-1255U**, two workers on six cores, over the same 200 runs: the median run's
-p95 is **21.4 ms**, comfortably inside the 50 ms a 20 Hz tick allows. The worst
-run's p95 is **79.3 ms**, which does not fit — the loop cannot hold 20 Hz
-everywhere, and the densest scenes are where it fails.
+p95 is **21.4 ms**, and **199 of 200 runs replan inside the 50 ms** that a 20 Hz
+tick allows. The exception is a single run — `bus_stop_overtake`, seed 2 — whose
+p95 reaches 79.3 ms with one 149.7 ms tick.
+
+That outlier is a tail, not a scenario the planner cannot keep up with:
+per-scenario medians are flat between 21 and 23 ms, and the two densest scenes
+are among them (school zone 23.3 ms, dense market 22.9 ms, worst runs 29.1 and
+35.1 ms respectively). Whatever costs that one run its budget is specific to it.
 
 Running the identical campaign with more workers than physical cores inflated
-that figure **3.1×**, to a median p95 of 76.5 ms. Everything else was
+the figure **3.1×**, to a median p95 of 76.5 ms. Everything else was
 bit-identical between the two runs — same collision count, same progress, same
 distance, to the digit. That is the useful confirmation: the simulator is
 deterministic, so only the wall-clock row can be corrupted by load, and it was.
