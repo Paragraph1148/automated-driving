@@ -120,7 +120,7 @@ given below.
 | Contacts per 100 km | 820 | 748 |
 | …of which we drove into | 714 | 549 |
 | Routes completed | 1 / 200 | 0 / 200 |
-| Replan latency, median p95 | 24.6 ms | — |
+| Replan latency, median p95 | 21.4 ms | — |
 
 Per scenario, mean route progress and runs that ended without contact:
 
@@ -159,15 +159,20 @@ Each contact is recorded with our own speed and the bearing of the other body, s
 separately: 67 of our 77 contacts were ours to avoid, against 44 of the
 baseline's 60.
 
-**On latency.** Replan time is the one metric here that is not deterministic —
+**On latency.** Replan time is the only metric here that is not deterministic —
 it is wall-clock, so a busy machine corrupts it. Measured on an **Intel Core
-i7-1255U** with two workers on six cores, the median run's p95 is **24.6 ms**,
-about half the 50 ms a 20 Hz tick allows, and 28 of 30 runs stay inside that
-budget; the dense market (50.8 ms) and the unsignalled junction (59.3 ms) exceed
-it. Running the same campaign with more workers than physical cores inflated the
-figure **3.1×**, to a median p95 of 76.5 ms. If you re-measure, use
-`--workers` well under your core count and pass the result to
-`analyse_campaign.py --latency`.
+i7-1255U**, two workers on six cores, over the same 200 runs: the median run's
+p95 is **21.4 ms**, comfortably inside the 50 ms a 20 Hz tick allows. The worst
+run's p95 is **79.3 ms**, which does not fit — the loop cannot hold 20 Hz
+everywhere, and the densest scenes are where it fails.
+
+Running the identical campaign with more workers than physical cores inflated
+that figure **3.1×**, to a median p95 of 76.5 ms. Everything else was
+bit-identical between the two runs — same collision count, same progress, same
+distance, to the digit. That is the useful confirmation: the simulator is
+deterministic, so only the wall-clock row can be corrupted by load, and it was.
+If you re-measure, keep `--workers` well under your core count and pass the
+result to `analyse_campaign.py --latency`.
 
 **These numbers are lower than the ones this file used to report** (43.3 % versus
 36.2 % progress, on 30 runs). That is not a regression in the planner. The

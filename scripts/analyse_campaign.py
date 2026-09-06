@@ -24,6 +24,9 @@ from pathlib import Path
 
 from scipy.stats import fisher_exact
 
+#: One tick of a 20 Hz control loop, milliseconds. Replanning has to finish
+#: inside this or the loop is not running at the rate it claims.
+TICK_BUDGET_MS = 50.0
 #: A contact the ego was not moving for, arriving from behind, is a different
 #: event from one it drove into: something hit *it*. Counted separately rather
 #: than excluded - it is still a failure, just not the same failure.
@@ -84,6 +87,8 @@ def arm(rows: list[dict]) -> dict:
         "p95": max([r["replan_ms_p95"] for r in rows] or [0.0]),
         "p95_median": statistics.median(
             [r["replan_ms_p95"] for r in rows] or [0.0]),
+        "in_budget": sum(1 for r in rows
+                         if r["replan_ms_p95"] <= TICK_BUDGET_MS),
         "completed": sum(1 for r in rows if r.get("completed")),
         "errors": sum(1 for r in rows if r.get("error")),
     }
@@ -134,6 +139,8 @@ def main() -> None:
         print(f"    replan p95          {src['p95_median']:.1f} ms median, "
               f"{src['p95']:.1f} ms worst"
               + ("" if args.latency else "   <- wall-clock; see --latency"))
+        print(f"    inside 20 Hz budget {src['in_budget']}/{src['runs']} runs "
+              f"have p95 <= {TICK_BUDGET_MS:.0f} ms")
         if a["errors"]:
             print(f"    ERRORS              {a['errors']}")
         print()
@@ -155,7 +162,12 @@ def main() -> None:
         print("\n" + "=" * 72 + "\nPASTE BELOW INTO README.md\n" + "=" * 72 + "\n")
         s, base = arms.get("sarathi"), arms.get("baseline")
         if not (s and base):
-            print("(need both controllers for the README block)"); return
+            print("This file holds one controller, so there is nothing to compare.\n"
+                  "Run the campaign with both, and pass a separate uncontended\n"
+                  "campaign for the latency row:\n\n"
+                  "  analyse_campaign.py artifacts/benchmark.json \\\n"
+                  "      --latency artifacts/latency-clean.json --readme")
+            return
         _, p = fisher_exact([[s["clean"], s["runs"] - s["clean"]],
                              [base["clean"], base["runs"] - base["clean"]]])
         print("## Results\n")
