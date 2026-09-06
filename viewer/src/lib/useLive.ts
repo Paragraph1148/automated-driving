@@ -94,7 +94,14 @@ export function useLive() {
         setMeta(msg.meta as Meta);
         return;
       }
-      if (msg.grabbed !== undefined) return;
+      // Identify a frame POSITIVELY, by the field only a frame has. Listing
+      // the non-frames instead is what broke the ablations: every `set`
+      // command is answered with {"tuned": {...}} and reset_tuning broadcasts
+      // {"values": {...}}, neither of which was listed, so both were stored
+      // as the current frame. The draw loop then read `f.ego.h` off an object
+      // with no ego and threw on every animation frame from then on — the
+      // canvas froze and only a reload recovered it.
+      if (msg.t === undefined) return;
       frameRef.current = msg as Frame;
     };
 
