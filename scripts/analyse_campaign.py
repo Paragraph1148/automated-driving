@@ -94,12 +94,23 @@ def main() -> None:
     ap.add_argument("path")
     ap.add_argument("--readme", action="store_true",
                     help="emit a markdown block ready to paste into README.md")
+    ap.add_argument("--latency", metavar="JSON",
+                    help="take the latency row from this campaign instead. Replan "
+                         "time is wall-clock, so it is the one metric a crowded "
+                         "machine corrupts: running more workers than cores "
+                         "inflated it 3.1x here. Measure it in its own run with "
+                         "workers well under core count, and pass that file.")
     args = ap.parse_args()
 
     data = json.loads(Path(args.path).read_text())
     rows = data["rows"]
+    lat_rows = rows
+    if args.latency:
+        lat_rows = json.loads(Path(args.latency).read_text())["rows"]
     names = sorted({r["controller"] for r in rows})
     arms = {c: arm([r for r in rows if r["controller"] == c]) for c in names}
+    lat = {c: arm([r for r in lat_rows if r["controller"] == c])
+           for c in sorted({r["controller"] for r in lat_rows})}
 
     print(f"campaign: {Path(args.path).name}   "
           f"{len(rows)} runs   seeds {len(data.get('seeds', []))}   "
@@ -119,8 +130,10 @@ def main() -> None:
               f"[{a['progress_lo']:.1%}, {a['progress_hi']:.1%}]")
         print(f"    mean speed          {a['mean_speed']:.2f} m/s")
         print(f"    reached the goal    {a['completed']}/{a['runs']}")
-        print(f"    replan p95          {a['p95_median']:.1f} ms median, "
-              f"{a['p95']:.1f} ms worst")
+        src = lat.get(c, a)
+        print(f"    replan p95          {src['p95_median']:.1f} ms median, "
+              f"{src['p95']:.1f} ms worst"
+              + ("" if args.latency else "   <- wall-clock; see --latency"))
         if a["errors"]:
             print(f"    ERRORS              {a['errors']}")
         print()
@@ -163,7 +176,10 @@ def main() -> None:
         print(f"| Contacts per 100 km | {s['per_100km']:.1f} | {base['per_100km']:.1f} |")
         print(f"| ...of which at fault | {s['at_fault_per_100km']:.1f} | "
               f"{base['at_fault_per_100km']:.1f} |")
-        print(f"| Replan latency, median p95 | {s['p95_median']:.0f} ms | - |")
+        ls = lat.get("sarathi", s)
+        print(f"| Routes completed | {s['completed']} / {s['runs']} | "
+              f"{base['completed']} / {base['runs']} |")
+        print(f"| Replan latency, median p95 | {ls['p95_median']:.0f} ms | - |")
         print()
         print(f"The safety difference between the two is **not statistically "
               f"significant** (Fisher exact, p = {p:.2f}): at this sample size the "
