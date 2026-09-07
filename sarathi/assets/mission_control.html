@@ -1,4 +1,6 @@
 <!doctype html>
+<html lang="en">
+<head>
 <meta charset="utf-8">
 <!-- Without this the page is laid out at a 980px virtual viewport and scaled
      down: a 390px phone reports window.innerWidth === 980, so the mobile
@@ -9,16 +11,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SARATHI Mission Control</title>
 <meta name="description" content="A motion-planning stack for unstructured Indian roads, running live in your browser. Drop a cow in front of it and watch it replan.">
-<!-- Link previews. __OG_BASE__ is substituted per request from the Host header:
-     scrapers need absolute URLs, but baking a hostname into the template would
-     cost the property that it is byte-identical on a laptop and behind TLS on
-     someone else's domain. -->
-<meta property="og:type" content="website">
+<!-- Link previews.
+
+     The origin below is substituted per request from the Host header: scrapers
+     need absolute URLs, but baking a hostname into the template would cost the
+     property that it is byte-identical on a laptop and behind TLS on someone
+     else's domain.
+
+     Each tag carries BOTH a name and a property attribute. Open Graph specifies
+     property, and that is what most scrapers read - but LinkedIn's reads name,
+     and its own documentation prescribes the doubled form. Measured against the
+     live site: it took the page title and the description, both of which it
+     finds by name, and ignored every Open Graph tag on the page, falling back
+     to the title element and reporting no image at all. One tag carrying both
+     attributes satisfies each convention without stating the content twice.
+
+     No attribute syntax is quoted in this comment on purpose: a scraper that
+     matches tags by pattern rather than by parsing should not be able to find a
+     candidate in here. -->
+<meta name="type" property="og:type" content="website">
 <meta property="og:site_name" content="SARATHI">
-<meta property="og:title" content="SARATHI — live motion planning for unstructured Indian roads">
+<meta name="title" property="og:title" content="SARATHI — live motion planning for unstructured Indian roads">
 <meta property="og:description" content="Perception, prediction, a risk field and a trajectory search, running live at 20 Hz. Drop a cow anywhere on the road; the planner has no foreknowledge of it.">
-<meta property="og:url" content="__OG_BASE__/">
-<meta property="og:image" content="__OG_BASE__/og.png">
+<meta name="url" property="og:url" content="__OG_BASE__/">
+<meta name="image" property="og:image" content="__OG_BASE__/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="A vehicle negotiating traffic on an unmarked road, with its risk field and candidate trajectories drawn over the scene.">
@@ -26,6 +42,7 @@
 <meta name="twitter:title" content="SARATHI — live motion planning for unstructured Indian roads">
 <meta name="twitter:description" content="Perception, prediction, a risk field and a trajectory search, running live at 20 Hz. Drop a cow anywhere on the road.">
 <meta name="twitter:image" content="__OG_BASE__/og.png">
+<link rel="image_src" href="__OG_BASE__/og.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -316,7 +333,9 @@ button[aria-pressed="true"]{background:var(--accent-soft); border-color:var(--ac
 @media (prefers-reduced-motion:reduce){*{transition:none!important}
   .tour-ring{transition:none} .live-dot{animation:none}}
 </style>
+</head>
 
+<body>
 <div class="app">
   <header>
     <div>
@@ -1478,3 +1497,5 @@ if (LIVE){
 }
 })();
 </script>
+</body>
+</html>
