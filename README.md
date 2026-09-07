@@ -104,48 +104,96 @@ aggression, cattle, barricades and lane-marking visibility all scale with it.
 
 ## Results
 
-Ten scenarios × three seeds × two controllers, on identical seeds and identical
-sensor noise. Everything below comes out of `scripts/benchmark.py`; nothing here
-is typed in by hand.
+Ten scenarios × twenty seeds × two controllers, on identical seeds and identical
+sensor noise — **400 runs**. Everything below comes out of `scripts/benchmark.py`
+and is summarised by `scripts/analyse_campaign.py`; nothing here is typed in by
+hand. Replan latency is measured in a separate, uncontended run, for the reason
+given below.
 
 | | SARATHI | Lane-following baseline |
 |---|---|---|
-| Runs collision-free | 25 / 30 | 27 / 30 |
-| Mean route progress | **43.3 %** | 36.2 % |
+| Runs collision-free | 123 / 200 (62 %) | 140 / 200 (70 %) |
+| 95 % CI on that | [55 %, 68 %] | [63 %, 76 %] |
+| Mean route progress | **29.3 %** [27.2, 31.3] | 27.1 % [25.4, 28.7] |
 | Scenarios where it gets further | **8 of 10** | 2 of 10 |
-| Replan latency, median 95th percentile | 46 ms | — |
+| Distance covered | 9.4 km | 8.0 km |
+| Contacts per 100 km | 820 | 748 |
+| …of which we drove into | 714 | 549 |
+| Routes completed | 1 / 200 | 0 / 200 |
+| Replan latency, median p95 | 21.4 ms | — |
+| Runs replanning inside a 20 Hz tick | 199 / 200 | 200 / 200 |
 
-Per scenario, mean route progress (ours / baseline), and how many of the three
-runs ended without contact:
+Per scenario, mean route progress and runs that ended without contact:
 
-| Scenario | Ours | Baseline | Clean | p95 replan |
+| Scenario | Ours | Baseline | Clean (ours) | Clean (base) |
 |---|---|---|---|---|
-| Village road, unmarked | 47.6 % | 30.4 % | 2/3 | 47 ms |
-| Cattle crossing | 49.8 % | 46.7 % | 3/3 | 45 ms |
-| Dense market | 22.1 % | 13.0 % | 3/3 | 72 ms |
-| Highway merge | 40.3 % | 33.0 % | 3/3 | 39 ms |
-| Unsignalled junction | 48.3 % | 41.0 % | 1/3 | 56 ms |
-| Narrow bridge, oncoming | 61.2 % | 61.1 % | 3/3 | 37 ms |
-| Bus stop overtake | 34.6 % | 36.8 % | 3/3 | 38 ms |
-| Night, wrong-way rider | 40.2 % | 51.6 % | 1/3 | 37 ms |
-| Construction diversion | 27.4 % | 21.6 % | 3/3 | 46 ms |
-| School zone | 61.9 % | 27.3 % | 3/3 | 47 ms |
+| Bus stop overtake | 22.8 % | 21.9 % | 13/20 | 13/20 |
+| Cattle crossing | 34.7 % | 35.2 % | 16/20 | 14/20 |
+| Construction diversion | 22.2 % | 20.9 % | 12/20 | 16/20 |
+| Highway merge | 45.6 % | 33.2 % | 18/20 | 19/20 |
+| Dense market | 15.9 % | 13.0 % | 4/20 | 10/20 |
+| Narrow bridge, oncoming | 43.6 % | 42.7 % | 20/20 | 20/20 |
+| Night, wrong-way rider | 22.5 % | 20.0 % | 12/20 | 12/20 |
+| School zone | 30.1 % | 27.5 % | 9/20 | 14/20 |
+| Unsignalled junction | 34.4 % | 33.3 % | 14/20 | 9/20 |
+| Village road, unmarked | 20.7 % | 22.9 % | 5/20 | 13/20 |
 
-**What that does and does not say.** The vehicle gets appreciably further than a
-lane-based planner without ever reading a lane marking, and it does so on the
-scenarios that are hardest for one — a school at closing time, an unmarked
-village road, a dense market. It is *not* yet safer than the baseline by raw
-contact count: five of our thirty runs end in contact against the baseline's
-three. Three of those five happened with our vehicle stationary and another road
-user driving into it, which is a different failure from one we drove into, so
-each contact is recorded with our own speed and the bearing of the other body.
-Eight of ten scenarios replan inside the 50 ms budget that 20 Hz allows; the
-dense market peaks at 72 ms and is the one place we exceed it.
+**What that does and does not say.** It gets further than a lane-based planner
+without ever reading a lane marking, on 8 of the 10 scenarios. It also has
+more contacts — 62 % of runs clean against the baseline's 70 %. **Neither
+difference is statistically significant**: Fisher's exact test on the safety
+comparison gives *p* = 0.09, and the two progress intervals overlap. On 200 runs
+per arm this campaign still cannot separate the two controllers, and any claim
+that it can — in either direction — is unsupported.
 
-The baseline is a fair comparison, not a straw man: it sees the same sensors,
-the same noise and the same seeds, and it mostly fails by stopping rather than
-by crashing — which is exactly why the collision counts are close while the
-progress numbers are not.
+Where the contacts are is more informative than the total. They concentrate in
+the cluttered scenes: the dense market (4/20 clean against the baseline's 10/20),
+the unmarked village road (5/20 against 13/20), the school zone (9/20 against
+14/20). The pattern is consistent and it is not flattering: our planner pushes
+into gaps the baseline refuses to enter, and pays for it. The baseline earns much
+of its cleaner record by stopping — it covers 8.0 km to our 9.4 km, and completes
+no route at all. Neither controller is close to finishing routes: **1 of 200 for
+us, 0 of 200 for it.**
+
+Each contact is recorded with our own speed and the bearing of the other body, so
+"we drove into it" and "it drove into us while we were stopped" are counted
+separately: 67 of our 77 contacts were ours to avoid, against 44 of the
+baseline's 60.
+
+**On latency.** Replan time is the only metric here that is not deterministic —
+it is wall-clock, so a busy machine corrupts it. Measured on an **Intel Core
+i7-1255U**, two workers on six cores, over the same 200 runs: the median run's
+p95 is **21.4 ms**, and **199 of 200 runs replan inside the 50 ms** that a 20 Hz
+tick allows. The exception is a single run — `bus_stop_overtake`, seed 2 — whose
+p95 reaches 79.3 ms with one 149.7 ms tick.
+
+That outlier is a tail, not a scenario the planner cannot keep up with:
+per-scenario medians are flat between 21 and 23 ms, and the two densest scenes
+are among them (school zone 23.3 ms, dense market 22.9 ms, worst runs 29.1 and
+35.1 ms respectively). Whatever costs that one run its budget is specific to it.
+
+Running the identical campaign with more workers than physical cores inflated
+the figure **3.1×**, to a median p95 of 76.5 ms. Everything else was
+bit-identical between the two runs — same collision count, same progress, same
+distance, to the digit. That is the useful confirmation: the simulator is
+deterministic, so only the wall-clock row can be corrupted by load, and it was.
+If you re-measure, keep `--workers` well under your core count and pass the
+result to `analyse_campaign.py --latency`.
+
+**These numbers are lower than the ones this file used to report** (43.3 % versus
+36.2 % progress, on 30 runs). That is not a regression in the planner. The
+simulation itself was wrong in ways that made it easier: cattle drifted out of
+the carriageway instead of standing in it, and wrong-way riders were steered by a
+sign error rather than actually riding against the flow. Fixing those made every
+number fall — including the **lane-following baseline's, whose code has not been
+touched since `97680a6`**. Identical code, same seeds, 36.2 % → 26.8 %. When a
+control you did not modify moves with the treatment, the world moved, not the
+planner.
+
+The baseline is a fair comparison, not a straw man: it sees the same sensors, the
+same noise and the same seeds, and it mostly fails by stopping rather than by
+crashing — which is why the collision counts are close while the progress numbers
+are not.
 
 ---
 

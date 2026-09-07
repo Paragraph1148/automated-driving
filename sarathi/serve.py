@@ -28,7 +28,7 @@ import time
 from http import HTTPStatus
 
 from .core.types import AgentClass
-from .paths import scenario_dir, viewer_template
+from .paths import ASSETS, scenario_dir, viewer_template
 from .tuning import apply as apply_tuning, read_all as read_tuning, schema
 from .planning.sarathi import SarathiController
 from .sim.simulator import Simulator
@@ -347,6 +347,24 @@ def _live_page() -> bytes:
     return viewer_template().replace("__RUN_DATA__", payload).encode("utf-8")
 
 
+def _og_base(request) -> str:
+    """Absolute origin for this request, for the link-preview tags.
+
+    Scrapers will not follow a relative og:image, so the tags have to carry a
+    hostname - but the template must not, or it stops being the same bytes on a
+    laptop and behind TLS on someone else's domain. So it is substituted here,
+    per request, from what the client actually asked for. X-Forwarded-Proto is
+    what a terminating proxy sets, and without honouring it every preview URL
+    behind TLS would be http:// and be dropped as mixed content.
+    """
+    headers = request.headers
+    host = headers.get("Host", "localhost")
+    proto = headers.get("X-Forwarded-Proto", "")
+    if not proto:
+        proto = "http" if host.startswith(("localhost", "127.0.0.1")) else "https"
+    return f"{proto}://{host}".rstrip("/")
+
+
 def _http_routes(page: bytes):
     """Answer plain HTTP on the socket that also carries the telemetry.
 
@@ -358,19 +376,34 @@ def _http_routes(page: bytes):
     from websockets.datastructures import Headers
     from websockets.http11 import Response
 
+    og_image = (ASSETS / "og.png").read_bytes()
+    # One rendered copy per origin. The substitution is cheap but the page is
+    # not small, and a scraper that fetches it repeatedly should not re-render.
+    by_origin: dict[str, bytes] = {}
+
     def process_request(connection, request):
         path = request.path.split("?", 1)[0]
         if path == "/ws":
             return None
+        if path == "/og.png":
+            return Response(200, "OK", Headers({
+                "Content-Type": "image/png",
+                "Content-Length": str(len(og_image)),
+                "Cache-Control": "public, max-age=3600"}), og_image)
         if path == "/healthz":
             # A body a load balancer, a systemd healthcheck or an uptime pinger
             # can read without opening a socket and pinning the core.
             return connection.respond(HTTPStatus.OK, "ok\n")
         if path in ("/", "/index.html", "/live.html"):
+            base = _og_base(request)
+            body = by_origin.get(base)
+            if body is None:
+                body = page.replace(b"__OG_BASE__", base.encode("utf-8"))
+                by_origin[base] = body
             return Response(200, "OK", Headers({
                 "Content-Type": "text/html; charset=utf-8",
-                "Content-Length": str(len(page)),
-                "Cache-Control": "no-store"}), page)
+                "Content-Length": str(len(body)),
+                "Cache-Control": "no-store"}), body)
         return connection.respond(HTTPStatus.NOT_FOUND, "not found\n")
 
     return process_request
