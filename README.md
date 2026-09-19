@@ -12,6 +12,23 @@ jerk-minimal trajectory lattice and an RSS safety supervisor — running at 20 H
 on an ordinary laptop CPU, with a live browser console you can interfere with
 while it drives.
 
+**In one table**, from a 400-run campaign (10 scenarios × 20 seeds × 2 controllers,
+paired on identical seeds and identical sensor noise):
+
+| | SARATHI | Lane-following baseline |
+|---|---|---|
+| Mean route progress | **29.3 %** [27.2, 31.3] | 27.1 % [25.4, 28.7] |
+| Scenarios where it gets further | **8 of 10** | 2 of 10 |
+| Runs collision-free | 123 / 200 (62 %) | 140 / 200 (70 %) |
+| Replan latency, median p95 | 21.4 ms | — |
+| Runs replanning inside a 20 Hz tick | 199 / 200 | 200 / 200 |
+
+It gets further than a lane-based planner **without ever reading a lane marking**,
+and it has more contacts doing it. Neither difference is statistically significant
+(Fisher's exact *p* = 0.09 on safety; the progress intervals overlap) — see
+**[Results](#results)** for why that matters and where the contacts concentrate.
+The planner has no branch anywhere for "markings missing", because it never looks.
+
 ---
 
 ## Quickstart
@@ -50,7 +67,7 @@ The port is configurable: `uv run sarathi serve --port 9000`.
 | **Drag** any vehicle | moves it while the world keeps running |
 | **Shift-click** a road user | removes it |
 | Scenario dropdown | switches roads without a restart |
-| **Thresholds** panel | all 31 tunables, adjustable mid-run |
+| **Thresholds** panel | all 32 tunables, adjustable mid-run |
 | **Ablations** | switch the risk field, the prediction or RSS off and watch it degrade |
 
 Nothing is scripted. The planner has no more foreknowledge of a hand-placed cow
@@ -309,10 +326,22 @@ situation and the two-tier MATLAB design.
 | B5 | MATLAB / Simulink / Stateflow / RoadRunner | not started |
 | B6 | Monte-Carlo campaign, ablations, report | campaign done; ablations and report next |
 
-Known and open: the vehicle is over-cautious in dense traffic, two scenarios
-account for four of the five contacts, prediction priors are hand-built rather
-than fitted to data, and the dense-market scene exceeds the 20 Hz replan budget.
-Each is measured on every run rather than tuned around.
+Known and open, measured on every run rather than tuned around:
+
+- **Contact concentrates in clutter.** 77 of 200 runs end in contact, and two
+  scenarios account for 31 of them (40 %): the dense market (16/20 runs) and the
+  unmarked village road (15/20). The highway merge, by contrast, is 2/20. The
+  planner pushes into gaps the baseline refuses, and pays for it there.
+- **Route completion is near zero for both controllers** — 1 of 200 for us, 0 of
+  200 for the baseline. Progress is the honest metric at this stage; completion
+  is not yet a meaningful comparison.
+- **Prediction priors are hand-built**, not fitted to data.
+- **Latency holds, but on a quiet machine.** Per-scenario medians sit flat between
+  21 and 23 ms when the campaign is run under-subscribed. `artifacts/benchmark.json`
+  was captured contended and shows 80-88 ms medians for the same scenarios — that
+  file is correct for every deterministic metric and wrong for latency only. Use
+  `artifacts/latency-clean.json` for timing, and keep `--workers` under your core
+  count when re-measuring.
 
 ## Licence
 
